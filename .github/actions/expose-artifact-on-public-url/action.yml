@@ -1,5 +1,5 @@
 name: Expose Build Artifact on a Public URL
-description: Exposes build artifacts on a public URL via GitHub releases for WordPress Playground preview access
+description: Exposes build artifacts on a public URL via GitHub releases for Moodle Playground preview access
 
 inputs:
   artifact-name:
@@ -176,7 +176,7 @@ runs:
         gh release create "$RELEASE_TAG" \
           --repo "$release_repo" \
           --draft \
-          --notes "Automated release for WordPress Playground CI artifacts"
+          --notes "Automated release for Moodle Playground CI artifacts"
 
     - name: Upload artifact to release
       id: expose-build-artifact-on-public-url

@@ -31837,6 +31837,9 @@ var __webpack_exports__ = {};
 const core = __nccwpck_require__(7484);
 const githubLib = __nccwpck_require__(3228);
 
+const MODE_APPEND = 'append-to-description';
+const MODE_COMMENT = 'comment';
+
 (async () => {
   const context = githubLib.context;
   const githubToken = core.getInput('github-token', {required: false});
@@ -31845,44 +31848,36 @@ const githubLib = __nccwpck_require__(3228);
   }
   const github = githubLib.getOctokit(githubToken);
   const mode = (core.getInput('mode', {required: false}) || '').trim().toLowerCase();
-  if (mode !== 'append-to-description' && mode !== 'comment') {
-    throw new Error(`Invalid preview mode: ${mode}. Accepted values: append-to-description, comment.`);
+  if (mode !== MODE_APPEND && mode !== MODE_COMMENT) {
+    throw new Error(`Invalid preview mode: ${mode}. Accepted values: ${MODE_APPEND}, ${MODE_COMMENT}.`);
   }
 
-  // Accept data from both context and inputs
   const prNumberInput = core.getInput('pr-number', {required: false});
 
   let pr = context.payload.pull_request;
   let repo = context.payload.repository;
 
-  // If pr-number is provided as input, fetch PR details from GitHub API
   if (prNumberInput) {
-    const prNumber = parseInt(prNumberInput, 10);
-    core.info(`Fetching PR #${prNumber} details from GitHub API...`);
-
-    // Get repo info from context or use current repo
-    const owner = repo ? (repo.owner.login || repo.owner.name || repo.owner.id) : context.repo.owner;
-    const repoName = repo ? repo.name : context.repo.repo;
+    const prNum = parseInt(prNumberInput, 10);
+    core.info(`Fetching PR #${prNum} details from GitHub API...`);
 
     try {
       const {data: prData} = await github.rest.pulls.get({
-        owner,
-        repo: repoName,
-        pull_number: prNumber,
+        owner: repo ? (repo.owner.login || repo.owner.name || repo.owner.id) : context.repo.owner,
+        repo: repo ? repo.name : context.repo.repo,
+        pull_number: prNum,
       });
 
-      // Replace pr and repo with fetched data
       pr = prData;
       if (!repo) {
         repo = prData.base.repo;
       }
-      core.info(`Successfully fetched PR #${prNumber}: "${prData.title}"`);
+      core.info(`Successfully fetched PR #${prNum}: "${prData.title}"`);
     } catch (error) {
-      throw new Error(`Failed to fetch PR #${prNumber}: ${error.message}`);
+      throw new Error(`Failed to fetch PR #${prNum}: ${error.message}`);
     }
   }
 
-  // Validate we have PR data from either context or API
   if (!pr) {
     throw new Error('This workflow must run on a pull_request event payload, or pr-number must be provided as input.');
   }
@@ -31896,47 +31891,33 @@ const githubLib = __nccwpck_require__(3228);
   const headSha = pr.head.sha;
   const baseRef = pr.base.ref;
 
-  const playgroundHostRaw = core.getInput('playground-host', {required: false}) || 'https://playground.wordpress.net';
+  const playgroundHostRaw = core.getInput('playground-host', {required: false}) || 'https://ateeducacion.github.io/moodle-playground';
   const playgroundHost = playgroundHostRaw.replace(/\/+$/, '');
 
   const pluginPath = (core.getInput('plugin-path', {required: false}) || '').trim();
-  const themePath = (core.getInput('theme-path', {required: false}) || '').trim();
-  const blueprintInput = core.getInput('blueprint', {required: false}) || '';
+  const blueprintInput = (core.getInput('blueprint', {required: false}) || '').trim();
   const blueprintUrlInput = (core.getInput('blueprint-url', {required: false}) || '').trim();
+  const moodleVersion = (core.getInput('moodle-version', {required: false}) || '5.0').trim();
 
-  if(!pluginPath && !themePath && !blueprintInput && !blueprintUrlInput) {
-    throw new Error('One of `plugin-path`, `theme-path`, `blueprint`, or `blueprint-url` inputs is required.');
+  if (!pluginPath && !blueprintInput && !blueprintUrlInput) {
+    throw new Error('One of `plugin-path`, `blueprint`, or `blueprint-url` inputs is required.');
   }
 
-  const descriptionTemplateInput = core.getInput('description-template', {required: false}) || '';
-  const commentTemplateInput = core.getInput('comment-template', {required: false}) || '';
-  const descriptionMarkerStart = '<!-- wp-playground-preview:start -->';
-  const descriptionMarkerEnd = '<!-- wp-playground-preview:end -->';
-  const commentIdentifier = '<!-- wp-playground-preview-comment -->';
+  const descriptionTemplateInput = (core.getInput('description-template', {required: false}) || '').trim();
+  const commentTemplateInput = (core.getInput('comment-template', {required: false}) || '').trim();
+  const descriptionMarkerStart = '<!-- moodle-playground-preview:start -->';
+  const descriptionMarkerEnd = '<!-- moodle-playground-preview:end -->';
+  const commentIdentifier = '<!-- moodle-playground-preview-comment -->';
   const restoreButtonIfRemoved = core.getInput('restore-button-if-removed', {required: false}) !== 'false';
 
-  const safeParseJson = (label, value, fallback = {}) => {
-    if (!value || !value.trim()) {
-  	return fallback;
-    }
-    try {
-  	return JSON.parse(value);
-    } catch (error) {
-  	throw new Error(`Unable to parse ${label} as JSON. ${error.message}`);
-    }
-  };
+  // Shared regex for the managed description block
+  const markerPattern = new RegExp(
+    `${descriptionMarkerStart}([\\s\\S]*?)${descriptionMarkerEnd}\\s*`,
+    'm'
+  );
 
-  const archiveBranchSegment = headRef.replace(/[^0-9A-Za-z]/g, '-');
-  const repoArchiveRoot = `${repoName}-${archiveBranchSegment}`;
-  const repoGitUrl = `https://github.com/${repoFullName}.git`;
+  const repoGitUrl = `https://github.com/${repoFullName}`;
 
-  const normalizePath = (path) => {
-    const raw = (path || '').trim();
-    if (!raw || raw === '.' || raw === './') {
-  	return '';
-    }
-    return raw.replace(/^\.\/+/, '').replace(/^\/+|\/+$/g, '');
-  };
   const sanitizeSlug = (value, fallback) => {
     if (!value) return fallback;
     const cleaned = value
@@ -31946,103 +31927,64 @@ const githubLib = __nccwpck_require__(3228);
     return cleaned || fallback;
   };
   const repoSlug = sanitizeSlug(repoName, 'project');
-  const inferSlug = (path, fallback) => {
-    const clean = normalizePath(path).split('/').filter(Boolean).pop();
-    if (!clean || clean === '.' || clean === '..') return fallback;
-    return sanitizeSlug(clean, fallback);
-  };
-
-  const pluginSlug = pluginPath ? inferSlug(pluginPath, repoSlug) : '';
-  const themeSlug = themePath ? inferSlug(themePath, `${repoSlug}-theme`) : '';
+  const pluginSlug = pluginPath
+    ? sanitizeSlug(pluginPath.replace(/^\.?\/?/, '').split('/').filter(Boolean).pop(), repoSlug)
+    : '';
 
   const buildAutoBlueprint = () => {
-    const steps = [];
+    const pluginZipUrl = `${repoGitUrl}/archive/refs/heads/${headRef}.zip`;
+    const steps = [
+      {
+        step: 'installMoodle',
+        options: {
+          siteName: `PR #${prNumber} Preview`,
+          adminUser: 'admin',
+          adminPass: 'password',
+        }
+      },
+      { step: 'login', username: 'admin' }
+    ];
 
     if (pluginPath) {
-  	steps.push(
-  	  {
-  		step: 'installPlugin',
-  		pluginData: {
-  		  resource: 'git:directory',
-  		  url: repoGitUrl,
-  		  ref: headRef,
-  		  path: normalizePath(pluginPath) || "/"
-  		},
-  		options: {
-  		  activate: true
-  		}
-  	  }
-  	);
+      steps.push({ step: 'installMoodlePlugin', url: pluginZipUrl });
     }
 
-    if (themePath) {
-  	steps.push(
-  	  {
-  		step: 'installTheme',
-  		themeData: {
-  		  resource: 'git:directory',
-  		  url: repoGitUrl,
-  		  ref: headRef,
-  		  path: normalizePath(themePath) || "/"
-  		},
-  		options: {
-  		  activate: true
-  		}
-  	  }
-  	);
-    }
-
-    return JSON.stringify(
-  	{
-  	  $schema: 'https://playground.wordpress.net/blueprint-schema.json',
-  	  preferredVersions: {
-  		php: '8.2',
-  		wp: 'latest'
-  	  },
-  	  steps
-  	}
-    );
+    return JSON.stringify({
+      preferredVersions: { php: '8.3', moodle: moodleVersion },
+      steps
+    });
   };
 
   let blueprintJson = '';
-  if (blueprintInput && blueprintInput.trim().length) {
-    blueprintJson = blueprintInput.trim();
-  } else if (pluginPath || themePath) {
-    blueprintJson = buildAutoBlueprint();
-  }
-
-  if (blueprintJson) {
+  if (blueprintInput) {
+    blueprintJson = blueprintInput;
     try {
       JSON.parse(blueprintJson);
     } catch (error) {
       core.warning(blueprintJson);
       throw new Error(`Blueprint is not valid JSON. ${error.message}`);
     }
+  } else if (pluginPath) {
+    blueprintJson = buildAutoBlueprint();
   }
 
   const mergeVariables = (...maps) => maps.reduce((acc, map) => {
     Object.entries(map || {}).forEach(([key, value]) => {
-  	if (value === undefined || value === null) {
-  	  return;
-  	}
+  	if (value === undefined || value === null) return;
   	acc[String(key).toUpperCase()] = typeof value === 'string' ? value : JSON.stringify(value);
     });
     return acc;
   }, {});
 
   const substitute = (template, values) => {
-    if (!template) {
-  	return '';
-    }
+    if (!template) return '';
     return template.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/gi, (match, key) => {
   	const upperKey = key.toUpperCase();
   	let value = Object.prototype.hasOwnProperty.call(values, upperKey)
   	  ? values[upperKey]
   	  : '';
 
-  	// Escape HTML entities somewhat naively to prevent the values leaking
-  	// into HTML syntax elements.
-  	if(key !== 'PLAYGROUND_BUTTON') {
+  	if (key !== 'PLAYGROUND_BUTTON') {
   	  value = value
   		.replace(/&/g, '&amp;')
   		.replace(/</g, '&lt;')
@@ -32054,109 +31996,85 @@ const githubLib = __nccwpck_require__(3228);
     });
   };
 
-  const blueprintDataUrl = blueprintJson
-    ? `data:application/json,${encodeURIComponent(blueprintJson)}`
+  const blueprintBase64 = blueprintJson
+    ? Buffer.from(blueprintJson).toString('base64')
     : '';
-  const finalBlueprintUrl = blueprintUrlInput || blueprintDataUrl;
-  const blueprintQueryValue = blueprintUrlInput
-    ? encodeURIComponent(blueprintUrlInput)
-    : blueprintDataUrl;
-  const previewUrl = `${playgroundHost}${playgroundHost.includes('?') ? '&' : '?'}blueprint-url=${blueprintQueryValue}`;
+  const previewUrl = blueprintUrlInput
+    ? `${playgroundHost}?blueprint-url=${encodeURIComponent(blueprintUrlInput)}`
+    : blueprintBase64
+      ? `${playgroundHost}?blueprint=${blueprintBase64}`
+      : playgroundHost;
 
-  const joinWithNewline = (segments) => segments.join('\n');
-  const defaultButtonImageUrl = 'https://raw.githubusercontent.com/adamziel/playground-preview/refs/heads/trunk/assets/playground-preview-button.svg';
-
-  const defaultButtonTemplate = joinWithNewline([
+  const defaultButtonTemplate = [
     '<a href="{{PLAYGROUND_URL}}" target="_blank" rel="noopener noreferrer">',
-    '  <img src="{{PLAYGROUND_BUTTON_IMAGE_URL}}" alt="Open WordPress Playground Preview" width="220" height="57" />',
+    '  🎓 <strong>Preview in Moodle Playground</strong>',
     '</a>'
-  ]);
+  ].join('\n');
 
-  const defaultDescriptionTemplate = joinWithNewline([
-    '{{PLAYGROUND_BUTTON}}',
-  ]);
+  const defaultDescriptionTemplate = '{{PLAYGROUND_BUTTON}}';
 
-  const defaultCommentTemplate = joinWithNewline([
-    '### WordPress Playground Preview',
+  const defaultCommentTemplate = [
+    '### Moodle Playground Preview',
     '',
-    'The changes in this pull request can previewed and tested using a WordPress Playground instance.',
+    'The changes in this pull request can be previewed and tested using a Moodle Playground instance.',
     '',
     '{{PLAYGROUND_BUTTON}}',
-  ]);
-
-  const baseTemplateVars = {
-    PR_NUMBER: String(prNumber),
-    PR_TITLE: prTitle,
-    PR_HEAD_REF: headRef,
-    PR_HEAD_SHA: headSha,
-    PR_BASE_REF: baseRef,
-    REPO_OWNER: owner,
-    REPO_NAME: repoName,
-    REPO_FULL_NAME: repoFullName,
-    REPO_ARCHIVE_ROOT: repoArchiveRoot,
-    REPO_SLUG: repoSlug,
-    PLUGIN_PATH: pluginPath,
-    THEME_PATH: themePath,
-    PLUGIN_SLUG: pluginSlug,
-    THEME_SLUG: themeSlug,
-    PLAYGROUND_HOST: playgroundHost
-  };
+  ].join('\n');
 
   const templateVariables = mergeVariables(
-    baseTemplateVars,
     {
-  	PLAYGROUND_URL: previewUrl,
-  	PLAYGROUND_BLUEPRINT_JSON: blueprintJson,
-  	PLAYGROUND_BLUEPRINT_DATA_URL: finalBlueprintUrl,
-  	PLAYGROUND_BUTTON_IMAGE_URL: defaultButtonImageUrl,
-  	PLAYGROUND_BUTTON: substitute(defaultButtonTemplate, {})
+      PR_NUMBER: String(prNumber),
+      PR_TITLE: prTitle,
+      PR_HEAD_REF: headRef,
+      PR_HEAD_SHA: headSha,
+      PR_BASE_REF: baseRef,
+      REPO_OWNER: owner,
+      REPO_NAME: repoName,
+      REPO_FULL_NAME: repoFullName,
+      REPO_SLUG: repoSlug,
+      PLUGIN_PATH: pluginPath,
+      PLUGIN_SLUG: pluginSlug,
+      MOODLE_VERSION: moodleVersion,
+      PLAYGROUND_HOST: playgroundHost,
+    },
+    {
+      PLAYGROUND_URL: previewUrl,
+      PLAYGROUND_BLUEPRINT_JSON: blueprintJson,
     }
   );
-
   templateVariables.PLAYGROUND_BUTTON = substitute(defaultButtonTemplate, templateVariables);
 
-  const descriptionTemplate = descriptionTemplateInput && descriptionTemplateInput.trim().length
-    ? descriptionTemplateInput
-    : defaultDescriptionTemplate;
-  const commentTemplate = commentTemplateInput && commentTemplateInput.trim().length
-    ? commentTemplateInput
-    : defaultCommentTemplate;
+  const descriptionTemplate = descriptionTemplateInput || defaultDescriptionTemplate;
+  const commentTemplate = commentTemplateInput || defaultCommentTemplate;
 
-  const renderedDescription = substitute(descriptionTemplate, templateVariables);
-  const renderedComment = substitute(commentTemplate, templateVariables);
+  const renderedDescription = mode === MODE_APPEND
+    ? substitute(descriptionTemplate, templateVariables) : '';
+  const renderedComment = mode === MODE_COMMENT
+    ? substitute(commentTemplate, templateVariables) : '';
 
   const performDescriptionUpdate = async () => {
     const currentBody = pr.body || '';
-    const managedBlock = `${descriptionMarkerStart}${String.fromCodePoint(10)}${renderedDescription.trim()}${String.fromCodePoint(10)}${descriptionMarkerEnd}`;
+    const managedBlock = `${descriptionMarkerStart}\n${renderedDescription.trim()}\n${descriptionMarkerEnd}`;
     let nextBody;
 
     if (currentBody.includes(descriptionMarkerStart) && currentBody.includes(descriptionMarkerEnd)) {
-  	// Markers exist - check if there's a user placeholder
-  	const pattern = new RegExp(
-  	  `${descriptionMarkerStart}([\\s\\S]*?)${descriptionMarkerEnd}`,
-  	  'm'
-  	);
-  	const match = currentBody.match(pattern);
+  	const match = currentBody.match(markerPattern);
   	if (match) {
   	  const existingContent = match[1].trim();
-  	  // If content exists but doesn't contain typical button HTML, assume it's a user placeholder
   	  const looksLikeButton = existingContent.includes('<a ') && existingContent.includes('playground');
   	  if (existingContent && !looksLikeButton) {
   		core.info('User placeholder detected between markers. Skipping update to respect user preference.');
   		return;
   	  }
   	}
-  	// Update existing button
-  	nextBody = currentBody.replace(pattern, managedBlock);
+  	nextBody = currentBody.replace(markerPattern, managedBlock);
     } else {
-  	// Markers don't exist - check if we should restore
   	if (!restoreButtonIfRemoved) {
   	  core.info('Button markers not found and restore-button-if-removed is false. Skipping to respect user removal.');
   	  return;
   	}
-  	// Add the button
   	const trimmed = currentBody.trimEnd();
-  	nextBody = trimmed ? `${trimmed}${String.fromCodePoint(10)}${String.fromCodePoint(10)}${managedBlock}` : managedBlock;
+  	nextBody = trimmed ? `${trimmed}\n\n${managedBlock}` : managedBlock;
     }
 
     if (nextBody !== currentBody) {
@@ -32166,7 +32084,7 @@ const githubLib = __nccwpck_require__(3228);
   	  pull_number: prNumber,
   	  body: nextBody
   	});
-  	core.info('PR description updated with Playground preview button.');
+  	core.info('PR description updated with Moodle Playground preview button.');
     } else {
   	core.info('PR description already up to date. No changes applied.');
     }
@@ -32178,11 +32096,7 @@ const githubLib = __nccwpck_require__(3228);
   	return;
     }
 
-    const pattern = new RegExp(
-  	`${descriptionMarkerStart}[\\s\\S]*?${descriptionMarkerEnd}\\s*`,
-  	'm'
-    );
-    const nextBody = currentBody.replace(pattern, '').trimEnd();
+    const nextBody = currentBody.replace(markerPattern, '').trimEnd();
 
     if (nextBody !== currentBody) {
   	await github.rest.pulls.update({
@@ -32195,18 +32109,23 @@ const githubLib = __nccwpck_require__(3228);
     }
   };
 
-  const performCommentUpdate = async () => {
-    const managedBody = `${commentIdentifier}${String.fromCodePoint(10)}${renderedComment.trim()}`;
-    const comments = await github.paginate(github.rest.issues.listComments, {
-  	owner,
-  	repo: repoName,
-  	issue_number: prNumber,
-  	per_page: 100
-    });
+  const findExistingComment = async () => {
+    let page = 1;
+    while (true) {
+  	const {data: batch} = await github.rest.issues.listComments({
+  	  owner, repo: repoName, issue_number: prNumber,
+  	  per_page: 100, page,
+  	});
+  	if (batch.length === 0) return null;
+  	const found = batch.find(c => typeof c.body === 'string' && c.body.includes(commentIdentifier));
+  	if (found) return found;
+  	page++;
+    }
+  };
 
-    const existing = comments.find((comment) =>
-  	typeof comment.body === 'string' && comment.body.includes(commentIdentifier)
-    );
+  const performCommentUpdate = async () => {
+    const managedBody = `${commentIdentifier}\n${renderedComment.trim()}`;
+    const existing = await findExistingComment();
 
     if (existing) {
   	if (existing.body !== managedBody) {
@@ -32234,7 +32153,7 @@ const githubLib = __nccwpck_require__(3228);
   };
 
   let commentId = '';
-  if (mode === 'append-to-description') {
+  if (mode === MODE_APPEND) {
     await performDescriptionUpdate();
   } else {
     await removeManagedDescriptionBlock();
