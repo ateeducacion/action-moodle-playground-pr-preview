@@ -86,6 +86,26 @@ with:
   github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
+### Blueprint from file
+
+If your repository includes a `blueprint.json` with a rich setup (courses, users, extra plugins, etc.), the action can read it directly and automatically replace plugin URLs for the PR branch:
+
+```yaml
+steps:
+  - uses: actions/checkout@v4
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+  - uses: ateeducacion/action-moodle-playground-pr-preview@v1
+    with:
+      blueprint-file: blueprint.json
+      mode: comment
+      github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+The action finds all `installMoodlePlugin` steps whose `url` contains the current repository (`github.com/{owner}/{repo}`) and replaces them with the PR branch archive URL. This works correctly for PRs from forks too.
+
+> **Note:** You must run `actions/checkout` before this step so the file is available.
+
 ### External Blueprint URL
 
 ```yaml
@@ -126,6 +146,14 @@ with:
 When provided, `plugin-path` is ignored. The blueprint is base64-encoded and passed via the `?blueprint=` parameter.
 
 Learn more about Moodle Playground blueprints in the [Moodle Playground documentation](https://github.com/ateeducacion/moodle-playground/blob/main/docs/blueprint-json.md).
+
+### `blueprint-file`
+
+**Optional** Path to a local blueprint JSON file in the checked-out repository.
+
+When provided, the action reads the file, finds all `installMoodlePlugin` steps whose URL matches the current repository (`github.com/{owner}/{repo}`), and replaces those URLs with the PR branch archive URL. This allows you to maintain a rich blueprint in your repo (with courses, users, additional plugins, etc.) without needing an intermediate `github-script` step.
+
+Requires `actions/checkout` before this step. Takes priority over `plugin-path` but is overridden by `blueprint`.
 
 ### `blueprint-url`
 

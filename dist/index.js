@@ -31834,6 +31834,7 @@ module.exports = parseParams
 /******/ 	
 /************************************************************************/
 var __webpack_exports__ = {};
+const fs = __nccwpck_require__(9896);
 const core = __nccwpck_require__(7484);
 const githubLib = __nccwpck_require__(3228);
 
@@ -31890,17 +31891,19 @@ const MODE_COMMENT = 'comment';
   const headRef = pr.head.ref;
   const headSha = pr.head.sha;
   const baseRef = pr.base.ref;
+  const headRepoFullName = (pr.head.repo && pr.head.repo.full_name) || repoFullName;
 
   const playgroundHostRaw = core.getInput('playground-host', {required: false}) || 'https://ateeducacion.github.io/moodle-playground';
   const playgroundHost = playgroundHostRaw.replace(/\/+$/, '');
 
   const pluginPath = (core.getInput('plugin-path', {required: false}) || '').trim();
   const blueprintInput = (core.getInput('blueprint', {required: false}) || '').trim();
+  const blueprintFileInput = (core.getInput('blueprint-file', {required: false}) || '').trim();
   const blueprintUrlInput = (core.getInput('blueprint-url', {required: false}) || '').trim();
   const moodleVersion = (core.getInput('moodle-version', {required: false}) || '5.0').trim();
 
-  if (!pluginPath && !blueprintInput && !blueprintUrlInput) {
-    throw new Error('One of `plugin-path`, `blueprint`, or `blueprint-url` inputs is required.');
+  if (!pluginPath && !blueprintInput && !blueprintFileInput && !blueprintUrlInput) {
+    throw new Error('One of `plugin-path`, `blueprint`, `blueprint-file`, or `blueprint-url` inputs is required.');
   }
 
   const descriptionTemplateInput = (core.getInput('description-template', {required: false}) || '').trim();
@@ -31955,6 +31958,44 @@ const MODE_COMMENT = 'comment';
     });
   };
 
+  const buildBlueprintFromFile = () => {
+    let raw;
+    try {
+      raw = fs.readFileSync(blueprintFileInput, 'utf8');
+    } catch (err) {
+      throw new Error(`Failed to read blueprint file "${blueprintFileInput}": ${err.message}`);
+    }
+
+    let blueprint;
+    try {
+      blueprint = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`Blueprint file "${blueprintFileInput}" is not valid JSON: ${err.message}`);
+    }
+
+    const repoPattern = `github.com/${repoFullName}`;
+    const prArchiveUrl = `https://github.com/${headRepoFullName}/archive/refs/heads/${headRef}.zip`;
+    let replacedCount = 0;
+
+    if (Array.isArray(blueprint.steps)) {
+      for (const step of blueprint.steps) {
+        if (step.step === 'installMoodlePlugin' && typeof step.url === 'string' && step.url.includes(repoPattern)) {
+          core.info(`blueprint-file: replacing URL in installMoodlePlugin step: ${step.url} -> ${prArchiveUrl}`);
+          step.url = prArchiveUrl;
+          replacedCount++;
+        }
+      }
+    }
+
+    if (replacedCount === 0) {
+      core.warning(`blueprint-file: no installMoodlePlugin steps found with URLs matching "${repoPattern}". The blueprint will be used as-is.`);
+    } else {
+      core.info(`blueprint-file: replaced ${replacedCount} plugin URL(s) to point at PR branch.`);
+    }
+
+    return JSON.stringify(blueprint);
+  };
+
   let blueprintJson = '';
   if (blueprintInput) {
     blueprintJson = blueprintInput;
@@ -31964,6 +32005,8 @@ const MODE_COMMENT = 'comment';
       core.warning(blueprintJson);
       throw new Error(`Blueprint is not valid JSON. ${error.message}`);
     }
+  } else if (blueprintFileInput) {
+    blueprintJson = buildBlueprintFromFile();
   } else if (pluginPath) {
     blueprintJson = buildAutoBlueprint();
   }
@@ -32005,9 +32048,11 @@ const MODE_COMMENT = 'comment';
       ? `${playgroundHost}?blueprint=${blueprintBase64}`
       : playgroundHost;
 
+  const defaultButtonImageUrl = 'https://raw.githubusercontent.com/ateeducacion/action-moodle-playground-pr-preview/refs/heads/main/assets/playground-preview-button.svg';
+
   const defaultButtonTemplate = [
     '<a href="{{PLAYGROUND_URL}}" target="_blank" rel="noopener noreferrer">',
-    '  🎓 <strong>Preview in Moodle Playground</strong>',
+    `  <img src="${defaultButtonImageUrl}" alt="Preview in Moodle Playground" width="220" height="51" />`,
     '</a>'
   ].join('\n');
 
