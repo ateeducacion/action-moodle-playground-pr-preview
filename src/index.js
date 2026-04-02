@@ -244,7 +244,13 @@ const MODE_COMMENT = "comment";
     "</a>",
   ].join("\n");
 
-  const defaultDescriptionTemplate = "{{PLAYGROUND_BUTTON}}";
+  const defaultDescriptionTemplate = [
+    "<hr>",
+    "<h3>Moodle Playground Preview</h3>",
+    "<p>The changes in this pull request can be previewed and tested using a Moodle Playground instance.</p>",
+    "",
+    "{{PLAYGROUND_BUTTON}}",
+  ].join("\n");
 
   const defaultCommentTemplate = [
     "### Moodle Playground Preview",
