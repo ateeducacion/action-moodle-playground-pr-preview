@@ -32,6 +32,9 @@ inputs:
   comment-template:
     type: string
     description: Custom markdown/HTML template for PR comments (supports {{VARIABLE_NAME}} interpolation)
+  extra-text:
+    type: string
+    description: 'Optional text/HTML to display after the preview button (e.g., testing instructions). Also available as {{EXTRA_TEXT}} in custom templates.'
   restore-button-if-removed:
     type: boolean
     description: Whether to restore the preview button if removed by PR author (only applies to `append-to-description` mode)

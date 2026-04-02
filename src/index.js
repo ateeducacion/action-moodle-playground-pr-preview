@@ -1,23 +1,30 @@
-const fs = require('fs');
-const core = require('@actions/core');
-const githubLib = require('@actions/github');
+import fs from "node:fs";
+import * as core from "@actions/core";
+import * as githubLib from "@actions/github";
+import { mergeVariables, sanitizeSlug, substitute } from "./utils.js";
 
-const MODE_APPEND = 'append-to-description';
-const MODE_COMMENT = 'comment';
+const MODE_APPEND = "append-to-description";
+const MODE_COMMENT = "comment";
 
 (async () => {
   const context = githubLib.context;
-  const githubToken = core.getInput('github-token', {required: false});
+  const githubToken = core.getInput("github-token", { required: false });
   if (!githubToken) {
-    throw new Error('GITHUB_TOKEN (or github-token input) is required to call the GitHub API.');
+    throw new Error(
+      "GITHUB_TOKEN (or github-token input) is required to call the GitHub API.",
+    );
   }
   const github = githubLib.getOctokit(githubToken);
-  const mode = (core.getInput('mode', {required: false}) || '').trim().toLowerCase();
+  const mode = (core.getInput("mode", { required: false }) || "")
+    .trim()
+    .toLowerCase();
   if (mode !== MODE_APPEND && mode !== MODE_COMMENT) {
-    throw new Error(`Invalid preview mode: ${mode}. Accepted values: ${MODE_APPEND}, ${MODE_COMMENT}.`);
+    throw new Error(
+      `Invalid preview mode: ${mode}. Accepted values: ${MODE_APPEND}, ${MODE_COMMENT}.`,
+    );
   }
 
-  const prNumberInput = core.getInput('pr-number', {required: false});
+  const prNumberInput = core.getInput("pr-number", { required: false });
 
   let pr = context.payload.pull_request;
   let repo = context.payload.repository;
@@ -27,8 +34,10 @@ const MODE_COMMENT = 'comment';
     core.info(`Fetching PR #${prNum} details from GitHub API...`);
 
     try {
-      const {data: prData} = await github.rest.pulls.get({
-        owner: repo ? (repo.owner.login || repo.owner.name || repo.owner.id) : context.repo.owner,
+      const { data: prData } = await github.rest.pulls.get({
+        owner: repo
+          ? repo.owner.login || repo.owner.name || repo.owner.id
+          : context.repo.owner,
         repo: repo ? repo.name : context.repo.repo,
         pull_number: prNum,
       });
@@ -44,7 +53,9 @@ const MODE_COMMENT = 'comment';
   }
 
   if (!pr) {
-    throw new Error('This workflow must run on a pull_request event payload, or pr-number must be provided as input.');
+    throw new Error(
+      "This workflow must run on a pull_request event payload, or pr-number must be provided as input.",
+    );
   }
 
   const owner = repo.owner.login || repo.owner.name || repo.owner.id;
@@ -55,86 +66,116 @@ const MODE_COMMENT = 'comment';
   const headRef = pr.head.ref;
   const headSha = pr.head.sha;
   const baseRef = pr.base.ref;
-  const headRepoFullName = (pr.head.repo && pr.head.repo.full_name) || repoFullName;
+  const headRepoFullName = pr.head.repo?.full_name || repoFullName;
 
-  const playgroundHostRaw = core.getInput('playground-host', {required: false}) || 'https://ateeducacion.github.io/moodle-playground';
-  const playgroundHost = playgroundHostRaw.replace(/\/+$/, '');
+  const playgroundHostRaw =
+    core.getInput("playground-host", { required: false }) ||
+    "https://ateeducacion.github.io/moodle-playground";
+  const playgroundHost = playgroundHostRaw.replace(/\/+$/, "");
 
-  const pluginPath = (core.getInput('plugin-path', {required: false}) || '').trim();
-  const blueprintInput = (core.getInput('blueprint', {required: false}) || '').trim();
-  const blueprintFileInput = (core.getInput('blueprint-file', {required: false}) || '').trim();
-  const blueprintUrlInput = (core.getInput('blueprint-url', {required: false}) || '').trim();
-  const moodleVersion = (core.getInput('moodle-version', {required: false}) || '5.0').trim();
+  const pluginPath = (
+    core.getInput("plugin-path", { required: false }) || ""
+  ).trim();
+  const blueprintInput = (
+    core.getInput("blueprint", { required: false }) || ""
+  ).trim();
+  const blueprintFileInput = (
+    core.getInput("blueprint-file", { required: false }) || ""
+  ).trim();
+  const blueprintUrlInput = (
+    core.getInput("blueprint-url", { required: false }) || ""
+  ).trim();
+  const moodleVersion = (
+    core.getInput("moodle-version", { required: false }) || "5.0"
+  ).trim();
 
-  if (!pluginPath && !blueprintInput && !blueprintFileInput && !blueprintUrlInput) {
-    throw new Error('One of `plugin-path`, `blueprint`, `blueprint-file`, or `blueprint-url` inputs is required.');
+  if (
+    !pluginPath &&
+    !blueprintInput &&
+    !blueprintFileInput &&
+    !blueprintUrlInput
+  ) {
+    throw new Error(
+      "One of `plugin-path`, `blueprint`, `blueprint-file`, or `blueprint-url` inputs is required.",
+    );
   }
 
-  const descriptionTemplateInput = (core.getInput('description-template', {required: false}) || '').trim();
-  const commentTemplateInput = (core.getInput('comment-template', {required: false}) || '').trim();
-  const descriptionMarkerStart = '<!-- moodle-playground-preview:start -->';
-  const descriptionMarkerEnd = '<!-- moodle-playground-preview:end -->';
-  const commentIdentifier = '<!-- moodle-playground-preview-comment -->';
-  const restoreButtonIfRemoved = core.getInput('restore-button-if-removed', {required: false}) !== 'false';
+  const descriptionTemplateInput = (
+    core.getInput("description-template", { required: false }) || ""
+  ).trim();
+  const commentTemplateInput = (
+    core.getInput("comment-template", { required: false }) || ""
+  ).trim();
+  const extraText = (
+    core.getInput("extra-text", { required: false }) || ""
+  ).trim();
+  const descriptionMarkerStart = "<!-- moodle-playground-preview:start -->";
+  const descriptionMarkerEnd = "<!-- moodle-playground-preview:end -->";
+  const commentIdentifier = "<!-- moodle-playground-preview-comment -->";
+  const restoreButtonIfRemoved =
+    core.getInput("restore-button-if-removed", { required: false }) !== "false";
 
   // Shared regex for the managed description block
   const markerPattern = new RegExp(
     `${descriptionMarkerStart}([\\s\\S]*?)${descriptionMarkerEnd}\\s*`,
-    'm'
+    "m",
   );
 
   const repoGitUrl = `https://github.com/${repoFullName}`;
 
-  const sanitizeSlug = (value, fallback) => {
-    if (!value) return fallback;
-    const cleaned = value
-  	.toLowerCase()
-  	.replace(/[^a-z0-9-]+/g, '-')
-  	.replace(/^-+|-+$/g, '');
-    return cleaned || fallback;
-  };
-  const repoSlug = sanitizeSlug(repoName, 'project');
+  const repoSlug = sanitizeSlug(repoName, "project");
   const pluginSlug = pluginPath
-    ? sanitizeSlug(pluginPath.replace(/^\.?\/?/, '').split('/').filter(Boolean).pop(), repoSlug)
-    : '';
+    ? sanitizeSlug(
+        pluginPath
+          .replace(/^\.?\/?/, "")
+          .split("/")
+          .filter(Boolean)
+          .pop(),
+        repoSlug,
+      )
+    : "";
 
   const buildAutoBlueprint = () => {
     const pluginZipUrl = `${repoGitUrl}/archive/refs/heads/${headRef}.zip`;
     const steps = [
       {
-        step: 'installMoodle',
+        step: "installMoodle",
         options: {
           siteName: `PR #${prNumber} Preview`,
-          adminUser: 'admin',
-          adminPass: 'password',
-        }
+          adminUser: "admin",
+          adminPass: "password",
+        },
       },
-      { step: 'login', username: 'admin' }
+      { step: "login", username: "admin" },
     ];
 
     if (pluginPath) {
-      steps.push({ step: 'installMoodlePlugin', url: pluginZipUrl });
+      steps.push({ step: "installMoodlePlugin", url: pluginZipUrl });
     }
 
     return JSON.stringify({
-      preferredVersions: { php: '8.3', moodle: moodleVersion },
-      steps
+      preferredVersions: { php: "8.3", moodle: moodleVersion },
+      steps,
     });
   };
 
   const buildBlueprintFromFile = () => {
     let raw;
     try {
-      raw = fs.readFileSync(blueprintFileInput, 'utf8');
+      raw = fs.readFileSync(blueprintFileInput, "utf8");
     } catch (err) {
-      throw new Error(`Failed to read blueprint file "${blueprintFileInput}": ${err.message}`);
+      throw new Error(
+        `Failed to read blueprint file "${blueprintFileInput}": ${err.message}`,
+      );
     }
 
     let blueprint;
     try {
       blueprint = JSON.parse(raw);
     } catch (err) {
-      throw new Error(`Blueprint file "${blueprintFileInput}" is not valid JSON: ${err.message}`);
+      throw new Error(
+        `Blueprint file "${blueprintFileInput}" is not valid JSON: ${err.message}`,
+      );
     }
 
     const repoPattern = `github.com/${repoFullName}`;
@@ -143,8 +184,14 @@ const MODE_COMMENT = 'comment';
 
     if (Array.isArray(blueprint.steps)) {
       for (const step of blueprint.steps) {
-        if (step.step === 'installMoodlePlugin' && typeof step.url === 'string' && step.url.includes(repoPattern)) {
-          core.info(`blueprint-file: replacing URL in installMoodlePlugin step: ${step.url} -> ${prArchiveUrl}`);
+        if (
+          step.step === "installMoodlePlugin" &&
+          typeof step.url === "string" &&
+          step.url.includes(repoPattern)
+        ) {
+          core.info(
+            `blueprint-file: replacing URL in installMoodlePlugin step: ${step.url} -> ${prArchiveUrl}`,
+          );
           step.url = prArchiveUrl;
           replacedCount++;
         }
@@ -152,15 +199,19 @@ const MODE_COMMENT = 'comment';
     }
 
     if (replacedCount === 0) {
-      core.warning(`blueprint-file: no installMoodlePlugin steps found with URLs matching "${repoPattern}". The blueprint will be used as-is.`);
+      core.warning(
+        `blueprint-file: no installMoodlePlugin steps found with URLs matching "${repoPattern}". The blueprint will be used as-is.`,
+      );
     } else {
-      core.info(`blueprint-file: replaced ${replacedCount} plugin URL(s) to point at PR branch.`);
+      core.info(
+        `blueprint-file: replaced ${replacedCount} plugin URL(s) to point at PR branch.`,
+      );
     }
 
     return JSON.stringify(blueprint);
   };
 
-  let blueprintJson = '';
+  let blueprintJson = "";
   if (blueprintInput) {
     blueprintJson = blueprintInput;
     try {
@@ -175,60 +226,33 @@ const MODE_COMMENT = 'comment';
     blueprintJson = buildAutoBlueprint();
   }
 
-  const mergeVariables = (...maps) => maps.reduce((acc, map) => {
-    Object.entries(map || {}).forEach(([key, value]) => {
-  	if (value === undefined || value === null) return;
-  	acc[String(key).toUpperCase()] = typeof value === 'string' ? value : JSON.stringify(value);
-    });
-    return acc;
-  }, {});
-
-  const substitute = (template, values) => {
-    if (!template) return '';
-    return template.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/gi, (match, key) => {
-  	const upperKey = key.toUpperCase();
-  	let value = Object.prototype.hasOwnProperty.call(values, upperKey)
-  	  ? values[upperKey]
-  	  : '';
-
-  	if (key !== 'PLAYGROUND_BUTTON') {
-  	  value = value
-  		.replace(/&/g, '&amp;')
-  		.replace(/</g, '&lt;')
-  		.replace(/>/g, '&gt;')
-  		.replace(/"/g, '&quot;')
-  		.replace(/'/g, '&#039;');
-  	}
-  	return value;
-    });
-  };
-
   const blueprintBase64 = blueprintJson
-    ? Buffer.from(blueprintJson).toString('base64')
-    : '';
+    ? Buffer.from(blueprintJson).toString("base64")
+    : "";
   const previewUrl = blueprintUrlInput
     ? `${playgroundHost}?blueprint-url=${encodeURIComponent(blueprintUrlInput)}`
     : blueprintBase64
       ? `${playgroundHost}?blueprint=${blueprintBase64}`
       : playgroundHost;
 
-  const defaultButtonImageUrl = 'https://raw.githubusercontent.com/ateeducacion/action-moodle-playground-pr-preview/refs/heads/main/assets/playground-preview-button.svg';
+  const defaultButtonImageUrl =
+    "https://raw.githubusercontent.com/ateeducacion/action-moodle-playground-pr-preview/refs/heads/main/assets/playground-preview-button.svg";
 
   const defaultButtonTemplate = [
     '<a href="{{PLAYGROUND_URL}}" target="_blank" rel="noopener noreferrer">',
     `  <img src="${defaultButtonImageUrl}" alt="Preview in Moodle Playground" width="220" height="51" />`,
-    '</a>'
-  ].join('\n');
+    "</a>",
+  ].join("\n");
 
-  const defaultDescriptionTemplate = '{{PLAYGROUND_BUTTON}}';
+  const defaultDescriptionTemplate = "{{PLAYGROUND_BUTTON}}";
 
   const defaultCommentTemplate = [
-    '### Moodle Playground Preview',
-    '',
-    'The changes in this pull request can be previewed and tested using a Moodle Playground instance.',
-    '',
-    '{{PLAYGROUND_BUTTON}}',
-  ].join('\n');
+    "### Moodle Playground Preview",
+    "",
+    "The changes in this pull request can be previewed and tested using a Moodle Playground instance.",
+    "",
+    "{{PLAYGROUND_BUTTON}}",
+  ].join("\n");
 
   const templateVariables = mergeVariables(
     {
@@ -249,86 +273,128 @@ const MODE_COMMENT = 'comment';
     {
       PLAYGROUND_URL: previewUrl,
       PLAYGROUND_BLUEPRINT_JSON: blueprintJson,
-    }
+      EXTRA_TEXT: extraText,
+    },
   );
-  templateVariables.PLAYGROUND_BUTTON = substitute(defaultButtonTemplate, templateVariables);
+  templateVariables.PLAYGROUND_BUTTON = substitute(
+    defaultButtonTemplate,
+    templateVariables,
+  );
 
-  const descriptionTemplate = descriptionTemplateInput || defaultDescriptionTemplate;
+  const descriptionTemplate =
+    descriptionTemplateInput || defaultDescriptionTemplate;
   const commentTemplate = commentTemplateInput || defaultCommentTemplate;
 
-  const renderedDescription = mode === MODE_APPEND
-    ? substitute(descriptionTemplate, templateVariables) : '';
-  const renderedComment = mode === MODE_COMMENT
-    ? substitute(commentTemplate, templateVariables) : '';
+  let renderedDescription =
+    mode === MODE_APPEND
+      ? substitute(descriptionTemplate, templateVariables)
+      : "";
+  let renderedComment =
+    mode === MODE_COMMENT ? substitute(commentTemplate, templateVariables) : "";
+
+  // Append extra text after the rendered content if provided and not already
+  // placed via {{EXTRA_TEXT}} in a custom template
+  if (extraText) {
+    const extraTextUsedInTemplate =
+      descriptionTemplateInput?.includes("{{EXTRA_TEXT}}") ||
+      commentTemplateInput?.includes("{{EXTRA_TEXT}}");
+    if (!extraTextUsedInTemplate) {
+      if (renderedDescription)
+        renderedDescription = `${renderedDescription}\n\n${extraText}`;
+      if (renderedComment)
+        renderedComment = `${renderedComment}\n\n${extraText}`;
+    }
+  }
 
   const performDescriptionUpdate = async () => {
-    const currentBody = pr.body || '';
+    const currentBody = pr.body || "";
     const managedBlock = `${descriptionMarkerStart}\n${renderedDescription.trim()}\n${descriptionMarkerEnd}`;
     let nextBody;
 
-    if (currentBody.includes(descriptionMarkerStart) && currentBody.includes(descriptionMarkerEnd)) {
-  	const match = currentBody.match(markerPattern);
-  	if (match) {
-  	  const existingContent = match[1].trim();
-  	  const looksLikeButton = existingContent.includes('<a ') && existingContent.includes('playground');
-  	  if (existingContent && !looksLikeButton) {
-  		core.info('User placeholder detected between markers. Skipping update to respect user preference.');
-  		return;
-  	  }
-  	}
-  	nextBody = currentBody.replace(markerPattern, managedBlock);
+    if (
+      currentBody.includes(descriptionMarkerStart) &&
+      currentBody.includes(descriptionMarkerEnd)
+    ) {
+      const match = currentBody.match(markerPattern);
+      if (match) {
+        const existingContent = match[1].trim();
+        const looksLikeButton =
+          existingContent.includes("<a ") &&
+          existingContent.includes("playground");
+        if (existingContent && !looksLikeButton) {
+          core.info(
+            "User placeholder detected between markers. Skipping update to respect user preference.",
+          );
+          return;
+        }
+      }
+      nextBody = currentBody.replace(markerPattern, managedBlock);
     } else {
-  	if (!restoreButtonIfRemoved) {
-  	  core.info('Button markers not found and restore-button-if-removed is false. Skipping to respect user removal.');
-  	  return;
-  	}
-  	const trimmed = currentBody.trimEnd();
-  	nextBody = trimmed ? `${trimmed}\n\n${managedBlock}` : managedBlock;
+      if (!restoreButtonIfRemoved) {
+        core.info(
+          "Button markers not found and restore-button-if-removed is false. Skipping to respect user removal.",
+        );
+        return;
+      }
+      const trimmed = currentBody.trimEnd();
+      nextBody = trimmed ? `${trimmed}\n\n${managedBlock}` : managedBlock;
     }
 
     if (nextBody !== currentBody) {
-  	await github.rest.pulls.update({
-  	  owner,
-  	  repo: repoName,
-  	  pull_number: prNumber,
-  	  body: nextBody
-  	});
-  	core.info('PR description updated with Moodle Playground preview button.');
+      await github.rest.pulls.update({
+        owner,
+        repo: repoName,
+        pull_number: prNumber,
+        body: nextBody,
+      });
+      core.info(
+        "PR description updated with Moodle Playground preview button.",
+      );
     } else {
-  	core.info('PR description already up to date. No changes applied.');
+      core.info("PR description already up to date. No changes applied.");
     }
   };
 
   const removeManagedDescriptionBlock = async () => {
-    const currentBody = pr.body || '';
-    if (!currentBody.includes(descriptionMarkerStart) || !currentBody.includes(descriptionMarkerEnd)) {
-  	return;
+    const currentBody = pr.body || "";
+    if (
+      !currentBody.includes(descriptionMarkerStart) ||
+      !currentBody.includes(descriptionMarkerEnd)
+    ) {
+      return;
     }
 
-    const nextBody = currentBody.replace(markerPattern, '').trimEnd();
+    const nextBody = currentBody.replace(markerPattern, "").trimEnd();
 
     if (nextBody !== currentBody) {
-  	await github.rest.pulls.update({
-  	  owner,
-  	  repo: repoName,
-  	  pull_number: prNumber,
-  	  body: nextBody
-  	});
-  	core.info('Removed managed Playground block from PR description (comment mode active).');
+      await github.rest.pulls.update({
+        owner,
+        repo: repoName,
+        pull_number: prNumber,
+        body: nextBody,
+      });
+      core.info(
+        "Removed managed Playground block from PR description (comment mode active).",
+      );
     }
   };
 
   const findExistingComment = async () => {
     let page = 1;
     while (true) {
-  	const {data: batch} = await github.rest.issues.listComments({
-  	  owner, repo: repoName, issue_number: prNumber,
-  	  per_page: 100, page,
-  	});
-  	if (batch.length === 0) return null;
-  	const found = batch.find(c => typeof c.body === 'string' && c.body.includes(commentIdentifier));
-  	if (found) return found;
-  	page++;
+      const { data: batch } = await github.rest.issues.listComments({
+        owner,
+        repo: repoName,
+        issue_number: prNumber,
+        per_page: 100,
+        page,
+      });
+      if (batch.length === 0) return null;
+      const found = batch.find(
+        (c) => typeof c.body === "string" && c.body.includes(commentIdentifier),
+      );
+      if (found) return found;
+      page++;
     }
   };
 
@@ -337,44 +403,44 @@ const MODE_COMMENT = 'comment';
     const existing = await findExistingComment();
 
     if (existing) {
-  	if (existing.body !== managedBody) {
-  	  await github.rest.issues.updateComment({
-  		owner,
-  		repo: repoName,
-  		comment_id: existing.id,
-  		body: managedBody
-  	  });
-  	  core.info(`Updated existing preview comment (id: ${existing.id}).`);
-  	} else {
-  	  core.info('Preview comment already up to date.');
-  	}
-  	return existing.id;
+      if (existing.body !== managedBody) {
+        await github.rest.issues.updateComment({
+          owner,
+          repo: repoName,
+          comment_id: existing.id,
+          body: managedBody,
+        });
+        core.info(`Updated existing preview comment (id: ${existing.id}).`);
+      } else {
+        core.info("Preview comment already up to date.");
+      }
+      return existing.id;
     }
 
     const created = await github.rest.issues.createComment({
-  	owner,
-  	repo: repoName,
-  	issue_number: prNumber,
-  	body: managedBody
+      owner,
+      repo: repoName,
+      issue_number: prNumber,
+      body: managedBody,
     });
     core.info(`Posted new preview comment (id: ${created.data.id}).`);
     return created.data.id;
   };
 
-  let commentId = '';
+  let commentId = "";
   if (mode === MODE_APPEND) {
     await performDescriptionUpdate();
   } else {
     await removeManagedDescriptionBlock();
-    commentId = String(await performCommentUpdate() || '');
+    commentId = String((await performCommentUpdate()) || "");
   }
 
-  core.setOutput('mode', mode);
-  core.setOutput('preview-url', previewUrl);
-  core.setOutput('blueprint-json', blueprintJson);
-  core.setOutput('rendered-description', renderedDescription);
-  core.setOutput('rendered-comment', renderedComment);
-  core.setOutput('comment-id', commentId);
+  core.setOutput("mode", mode);
+  core.setOutput("preview-url", previewUrl);
+  core.setOutput("blueprint-json", blueprintJson);
+  core.setOutput("rendered-description", renderedDescription);
+  core.setOutput("rendered-comment", renderedComment);
+  core.setOutput("comment-id", commentId);
 })().catch((error) => {
   core.setFailed(error instanceof Error ? error.message : String(error));
 });

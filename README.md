@@ -184,10 +184,23 @@ The action generates a GitHub archive URL for the PR branch and creates an `inst
 - `{{REPO_OWNER}}`, `{{REPO_NAME}}`, `{{REPO_FULL_NAME}}`, `{{REPO_SLUG}}`
 - `{{PLUGIN_PATH}}`, `{{PLUGIN_SLUG}}`
 - `{{MOODLE_VERSION}}`
+- `{{EXTRA_TEXT}}`
 
 ### `comment-template`
 
 **Optional** Custom markdown/HTML template for PR comments. Same variables available.
+
+### `extra-text`
+
+**Optional** Text or HTML to display after the preview button. Useful for adding testing instructions or notes without writing a full custom template.
+
+```yaml
+with:
+  plugin-path: .
+  extra-text: '> **Note:** Log in with `admin` / `password` and navigate to Site Administration to test.'
+```
+
+The text is appended after the button in both `append-to-description` and `comment` modes. It is also available as `{{EXTRA_TEXT}}` for precise placement in custom templates.
 
 ### `restore-button-if-removed`
 

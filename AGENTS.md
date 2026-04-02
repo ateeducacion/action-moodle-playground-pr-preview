@@ -155,6 +155,7 @@ Users can customize the PR description/comment content using templates with `{{V
 | `REPO_OWNER`, `REPO_NAME`, `REPO_FULL_NAME`, `REPO_SLUG` | Repository metadata |
 | `PLUGIN_PATH`, `PLUGIN_SLUG` | Plugin input and derived slug |
 | `MOODLE_VERSION` | Moodle version input |
+| `EXTRA_TEXT` | Extra text input value |
 
 All variables are HTML-escaped in the output except `PLAYGROUND_BUTTON` (which contains trusted HTML).
 
@@ -190,6 +191,7 @@ In `comment` mode, the action searches PR comments for one containing the hidden
 | `moodle-version` | no | `5.0` | Moodle version for auto-generated blueprint |
 | `description-template` | no | `{{PLAYGROUND_BUTTON}}` | Custom template for PR description |
 | `comment-template` | no | *(see defaults in source)* | Custom template for PR comments |
+| `extra-text` | no | -- | Text/HTML to display after the preview button (e.g., testing instructions) |
 | `restore-button-if-removed` | no | `true` | Re-add button if PR author removes it |
 | `github-token` | no | `GITHUB_TOKEN` | Token with `pull-requests: write`, `contents: read` |
 | `pr-number` | no | *(from event)* | Override PR number (useful in `workflow_run` triggers) |

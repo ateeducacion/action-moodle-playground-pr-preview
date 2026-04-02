@@ -4,16 +4,22 @@
   "private": true,
   "description": "GitHub Action that posts a Moodle Playground preview button on pull requests.",
   "license": "GPL-2.0-or-later",
-  "type": "commonjs",
+  "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "build": "ncc build src/index.js -o dist"
+    "build": "ncc build src/index.js -o dist",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
   },
   "dependencies": {
     "@actions/core": "^3.0.0",
-    "@actions/github": "^6.0.0"
+    "@actions/github": "^9.0.0"
   },
   "devDependencies": {
-    "@vercel/ncc": "^0.38.1"
+    "@biomejs/biome": "^2.4.10",
+    "@vercel/ncc": "^0.38.4",
+    "vitest": "^4.1.2"
   }
 }
