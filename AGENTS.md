@@ -183,7 +183,7 @@ In `comment` mode, the action searches PR comments for one containing the hidden
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `mode` | no | `append-to-description` | `append-to-description` or `comment` |
-| `playground-host` | no | `https://ateeducacion.github.io/moodle-playground` | Base Moodle Playground URL |
+| `playground-host` | no | `https://moodle-playground.com` | Base Moodle Playground URL |
 | `blueprint` | no | -- | Custom blueprint JSON string (overrides `blueprint-file` and `plugin-path`) |
 | `blueprint-file` | no | -- | Path to local blueprint JSON; auto-swaps plugin URLs for PR branch |
 | `blueprint-url` | no | -- | Remote blueprint URL |
@@ -283,7 +283,7 @@ There are no runtime dependencies beyond `@actions/core` and `@actions/github`. 
 - **Ephemeral**: All state lives in memory (MEMFS). Closing the tab destroys everything. No persistence.
 - **Supported Moodle versions**: 4.4, 4.5, 5.0, 5.1, and main.
 - **Default credentials**: admin / password.
-- **Default host**: `https://ateeducacion.github.io/moodle-playground`.
+- **Default host**: `https://moodle-playground.com`.
 
 ### Moodle Plugin Naming Convention
 
@@ -302,7 +302,7 @@ Moodle Playground's `installMoodlePlugin` step auto-detects these from the GitHu
 
 | Aspect | WordPress version | Moodle version |
 |--------|------------------|----------------|
-| Playground host | `playground.wordpress.net` | `ateeducacion.github.io/moodle-playground` |
+| Playground host | `playground.wordpress.net` | `moodle-playground.com` |
 | Blueprint schema | WordPress Playground Blueprints | Moodle Playground Blueprints |
 | Plugin install step | `installPlugin` with `git:directory` resource | `installMoodlePlugin` with ZIP URL |
 | Theme handling | Separate `theme-path` input + `installTheme` step | Themes are plugins; use `installMoodlePlugin` or custom blueprint |

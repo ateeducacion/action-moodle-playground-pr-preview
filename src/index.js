@@ -70,7 +70,7 @@ const MODE_COMMENT = "comment";
 
   const playgroundHostRaw =
     core.getInput("playground-host", { required: false }) ||
-    "https://ateeducacion.github.io/moodle-playground";
+    "https://moodle-playground.com";
   const playgroundHost = playgroundHostRaw.replace(/\/+$/, "");
 
   const pluginPath = (

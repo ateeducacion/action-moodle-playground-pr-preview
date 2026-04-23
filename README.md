@@ -137,7 +137,7 @@ with:
 
 **Optional** Base Moodle Playground host URL.
 
-**Default:** `https://ateeducacion.github.io/moodle-playground`
+**Default:** `https://moodle-playground.com`
 
 ### `blueprint`
 

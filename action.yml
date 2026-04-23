@@ -9,7 +9,7 @@ inputs:
   playground-host:
     type: string
     description: Base Moodle Playground host URL
-    default: https://ateeducacion.github.io/moodle-playground
+    default: https://moodle-playground.com
   blueprint:
     type: string
     description: Custom Moodle Playground Blueprint as a JSON string. When provided, `plugin-path` is ignored.
