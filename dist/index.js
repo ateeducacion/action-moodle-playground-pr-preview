@@ -36309,7 +36309,7 @@ const MODE_COMMENT = "comment";
 
   const playgroundHostRaw =
     getInput("playground-host", { required: false }) ||
-    "https://ateeducacion.github.io/moodle-playground";
+    "https://moodle-playground.com";
   const playgroundHost = playgroundHostRaw.replace(/\/+$/, "");
 
   const pluginPath = (
