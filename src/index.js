@@ -2,7 +2,9 @@ import fs from "node:fs";
 import * as core from "@actions/core";
 import * as githubLib from "@actions/github";
 import {
+  computeNextDescriptionBody,
   mergeVariables,
+  removeManagedDescriptionBlockBody,
   sanitizeSlug,
   substitute,
   toBase64Url,
@@ -119,12 +121,6 @@ const MODE_COMMENT = "comment";
   const commentIdentifier = "<!-- moodle-playground-preview-comment -->";
   const restoreButtonIfRemoved =
     core.getInput("restore-button-if-removed", { required: false }) !== "false";
-
-  // Shared regex for the managed description block
-  const markerPattern = new RegExp(
-    `${descriptionMarkerStart}([\\s\\S]*?)${descriptionMarkerEnd}\\s*`,
-    "m",
-  );
 
   const repoGitUrl = `https://github.com/${repoFullName}`;
 
@@ -321,74 +317,56 @@ const MODE_COMMENT = "comment";
   const performDescriptionUpdate = async () => {
     const currentBody = pr.body || "";
     const managedBlock = `${descriptionMarkerStart}\n${renderedDescription.trim()}\n${descriptionMarkerEnd}`;
-    let nextBody;
+    const nextBody = computeNextDescriptionBody(
+      currentBody,
+      descriptionMarkerStart,
+      descriptionMarkerEnd,
+      managedBlock,
+      { restoreIfRemoved: restoreButtonIfRemoved },
+    );
 
-    if (
-      currentBody.includes(descriptionMarkerStart) &&
-      currentBody.includes(descriptionMarkerEnd)
-    ) {
-      const match = currentBody.match(markerPattern);
-      if (match) {
-        const existingContent = match[1].trim();
-        const looksLikeButton =
-          existingContent.includes("<a ") &&
-          existingContent.includes("playground");
-        if (existingContent && !looksLikeButton) {
-          core.info(
-            "User placeholder detected between markers. Skipping update to respect user preference.",
-          );
-          return;
-        }
-      }
-      nextBody = currentBody.replace(markerPattern, managedBlock);
-    } else {
-      if (!restoreButtonIfRemoved) {
-        core.info(
-          "Button markers not found and restore-button-if-removed is false. Skipping to respect user removal.",
-        );
-        return;
-      }
-      const trimmed = currentBody.trimEnd();
-      nextBody = trimmed ? `${trimmed}\n\n${managedBlock}` : managedBlock;
-    }
-
-    if (nextBody !== currentBody) {
-      await github.rest.pulls.update({
-        owner,
-        repo: repoName,
-        pull_number: prNumber,
-        body: nextBody,
-      });
+    if (nextBody === null) {
       core.info(
-        "PR description updated with Moodle Playground preview button.",
+        "Skipping description update (user placeholder detected, or markers removed with restore-button-if-removed=false).",
       );
-    } else {
-      core.info("PR description already up to date. No changes applied.");
+      return;
     }
+
+    if (nextBody === currentBody) {
+      core.info("PR description already up to date. No changes applied.");
+      return;
+    }
+
+    await github.rest.pulls.update({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+      body: nextBody,
+    });
+    core.info("PR description updated with Moodle Playground preview button.");
   };
 
   const removeManagedDescriptionBlock = async () => {
     const currentBody = pr.body || "";
-    if (
-      !currentBody.includes(descriptionMarkerStart) ||
-      !currentBody.includes(descriptionMarkerEnd)
-    ) {
+    const nextBody = removeManagedDescriptionBlockBody(
+      currentBody,
+      descriptionMarkerStart,
+      descriptionMarkerEnd,
+    );
+
+    if (nextBody === currentBody) {
       return;
     }
 
-    const nextBody = currentBody.replace(markerPattern, "").trimEnd();
-
-    if (nextBody !== currentBody) {
-      await github.rest.pulls.update({
-        owner,
-        repo: repoName,
-        pull_number: prNumber,
-        body: nextBody,
-      });
-      core.info(
-        "Removed managed Playground block from PR description (comment mode active).",
-      );
-    }
+    await github.rest.pulls.update({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+      body: nextBody,
+    });
+    core.info(
+      "Removed managed Playground block from PR description (comment mode active).",
+    );
   };
 
   const findExistingComment = async () => {
