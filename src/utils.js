@@ -53,3 +53,89 @@ export const substitute = (template, values) => {
     return value;
   });
 };
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Returns a RegExp that matches the managed description block (between
+ * `startMarker` and `endMarker`) plus a trailing run of whitespace. The body
+ * between the markers is captured in group 1.
+ *
+ * @param {string} startMarker
+ * @param {string} endMarker
+ * @returns {RegExp}
+ */
+export const descriptionBlockPattern = (startMarker, endMarker) =>
+  new RegExp(
+    `${escapeRegex(startMarker)}([\\s\\S]*?)${escapeRegex(endMarker)}\\s*`,
+    "m",
+  );
+
+/**
+ * Pure logic for "what should the PR body look like after this run?"
+ * Returns `null` when the action should leave the body untouched: either the
+ * user replaced the block content with their own placeholder text, or the
+ * markers are missing and `restoreIfRemoved` is `false`.
+ *
+ * @param {string} currentBody
+ * @param {string} startMarker
+ * @param {string} endMarker
+ * @param {string} block managed block to insert, including markers
+ * @param {object} [options]
+ * @param {boolean} [options.restoreIfRemoved=true]
+ * @returns {string | null}
+ */
+export const computeNextDescriptionBody = (
+  currentBody,
+  startMarker,
+  endMarker,
+  block,
+  options = {},
+) => {
+  const { restoreIfRemoved = true } = options;
+  const body = currentBody || "";
+  const pattern = descriptionBlockPattern(startMarker, endMarker);
+  const match = body.match(pattern);
+
+  if (match) {
+    const existingContent = (match[1] || "").trim();
+    const looksLikeButton =
+      existingContent.includes("<a ") &&
+      existingContent.toLowerCase().includes("playground");
+    if (existingContent && !looksLikeButton) {
+      return null;
+    }
+    return body.replace(pattern, block);
+  }
+
+  if (!restoreIfRemoved) {
+    return null;
+  }
+
+  const trimmed = body.trimEnd();
+  return trimmed ? `${trimmed}\n\n${block}` : block;
+};
+
+/**
+ * Returns the PR body with the managed description block removed, or the
+ * original body when no markers are present. Used when switching from
+ * `append-to-description` to `comment` mode so the preview lives in exactly
+ * one place.
+ *
+ * @param {string} currentBody
+ * @param {string} startMarker
+ * @param {string} endMarker
+ * @returns {string}
+ */
+export const removeManagedDescriptionBlockBody = (
+  currentBody,
+  startMarker,
+  endMarker,
+) => {
+  const body = currentBody || "";
+  const pattern = descriptionBlockPattern(startMarker, endMarker);
+  if (!pattern.test(body)) {
+    return body;
+  }
+  return body.replace(pattern, "").trimEnd();
+};
