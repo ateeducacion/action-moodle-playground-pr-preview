@@ -1,5 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { mergeVariables, sanitizeSlug, substitute } from "./utils.js";
+import {
+  mergeVariables,
+  sanitizeSlug,
+  substitute,
+  toBase64Url,
+} from "./utils.js";
+
+describe("toBase64Url", () => {
+  it("encodes ASCII input and strips padding", () => {
+    // 'sure.' encodes to 'c3VyZS4=' in standard base64; base64url drops the '='.
+    expect(toBase64Url("sure.")).toBe("c3VyZS4");
+  });
+
+  it("replaces + and / with - and _ so URLSearchParams round-trips losslessly", () => {
+    // The byte sequence 0xFB 0xFF emits '+' and '/' in standard base64.
+    const tricky = String.fromCharCode(0xfb, 0xff, 0xfb, 0xff, 0xfb, 0xff);
+    const encoded = toBase64Url(tricky);
+    expect(encoded).not.toMatch(/[+/=]/u);
+
+    const roundtrip = new URLSearchParams(`blueprint=${encoded}`).get(
+      "blueprint",
+    );
+    expect(roundtrip).toBe(encoded);
+  });
+
+  it("preserves UTF-8 multi-byte characters", () => {
+    const encoded = toBase64Url("café 🎉");
+    const padded = encoded + "=".repeat((4 - (encoded.length % 4)) % 4);
+    const standard = padded.replaceAll("-", "+").replaceAll("_", "/");
+    expect(Buffer.from(standard, "base64").toString("utf-8")).toBe("café 🎉");
+  });
+
+  it("produces an output decodable by the Moodle Playground parser", () => {
+    // The playground's parser.js normalises base64url back to standard base64
+    // and runs atob() — emulate that here to prove the round-trip works.
+    const json = JSON.stringify({ steps: [{ step: "installMoodle" }] });
+    const encoded = toBase64Url(json);
+    const padded = encoded + "=".repeat((4 - (encoded.length % 4)) % 4);
+    const standard = padded.replaceAll("-", "+").replaceAll("_", "/");
+    expect(Buffer.from(standard, "base64").toString("utf-8")).toBe(json);
+  });
+});
 
 describe("sanitizeSlug", () => {
   it("lowercases and strips non-alphanumeric characters", () => {

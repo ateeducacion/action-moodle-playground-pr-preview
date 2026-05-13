@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import * as core from "@actions/core";
 import * as githubLib from "@actions/github";
-import { mergeVariables, sanitizeSlug, substitute } from "./utils.js";
+import {
+  mergeVariables,
+  sanitizeSlug,
+  substitute,
+  toBase64Url,
+} from "./utils.js";
 
 const MODE_APPEND = "append-to-description";
 const MODE_COMMENT = "comment";
@@ -226,13 +231,14 @@ const MODE_COMMENT = "comment";
     blueprintJson = buildAutoBlueprint();
   }
 
-  const blueprintBase64 = blueprintJson
-    ? Buffer.from(blueprintJson).toString("base64")
-    : "";
+  // URL-safe base64 (RFC 4648 §5): the standard alphabet emits `+` which
+  // URLSearchParams.get() decodes as a space, corrupting the payload before
+  // the playground can read it. The playground accepts both variants.
+  const blueprintBase64Url = blueprintJson ? toBase64Url(blueprintJson) : "";
   const previewUrl = blueprintUrlInput
     ? `${playgroundHost}?blueprint-url=${encodeURIComponent(blueprintUrlInput)}`
-    : blueprintBase64
-      ? `${playgroundHost}?blueprint=${blueprintBase64}`
+    : blueprintBase64Url
+      ? `${playgroundHost}?blueprint=${blueprintBase64Url}`
       : playgroundHost;
 
   const defaultButtonImageUrl =

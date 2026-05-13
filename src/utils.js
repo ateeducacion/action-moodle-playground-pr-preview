@@ -1,3 +1,22 @@
+/**
+ * Encode a UTF-8 string as URL-safe base64 (RFC 4648 §5).
+ *
+ * Standard base64 emits `+`, `/`, and `=`, all of which break in URL query
+ * strings: `+` is decoded as a space by `URLSearchParams.get()` (a legacy of
+ * `application/x-www-form-urlencoded`), `/` is fine inside the value but ugly
+ * to log, and `=` is reserved as the key/value separator. Emitting base64url
+ * (`-`, `_`, no padding) lets the playground decode the param losslessly.
+ *
+ * @param {string} input UTF-8 string to encode.
+ * @returns {string} URL-safe base64 representation (no padding).
+ */
+export const toBase64Url = (input) =>
+  Buffer.from(input, "utf-8")
+    .toString("base64")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+
 export const sanitizeSlug = (value, fallback) => {
   if (!value) return fallback;
   const cleaned = value
