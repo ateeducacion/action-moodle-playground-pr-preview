@@ -181,17 +181,18 @@ const MODE_COMMENT = "comment";
 
     const repoPattern = `github.com/${repoFullName}`;
     const prArchiveUrl = `https://github.com/${headRepoFullName}/archive/refs/heads/${headRef}.zip`;
+    const rewritableSteps = new Set(["installMoodlePlugin", "installTheme"]);
     let replacedCount = 0;
 
     if (Array.isArray(blueprint.steps)) {
       for (const step of blueprint.steps) {
         if (
-          step.step === "installMoodlePlugin" &&
+          rewritableSteps.has(step.step) &&
           typeof step.url === "string" &&
           step.url.includes(repoPattern)
         ) {
           core.info(
-            `blueprint-file: replacing URL in installMoodlePlugin step: ${step.url} -> ${prArchiveUrl}`,
+            `blueprint-file: replacing URL in ${step.step} step: ${step.url} -> ${prArchiveUrl}`,
           );
           step.url = prArchiveUrl;
           replacedCount++;
@@ -201,11 +202,11 @@ const MODE_COMMENT = "comment";
 
     if (replacedCount === 0) {
       core.warning(
-        `blueprint-file: no installMoodlePlugin steps found with URLs matching "${repoPattern}". The blueprint will be used as-is.`,
+        `blueprint-file: no installMoodlePlugin/installTheme steps found with URLs matching "${repoPattern}". The blueprint will be used as-is.`,
       );
     } else {
       core.info(
-        `blueprint-file: replaced ${replacedCount} plugin URL(s) to point at PR branch.`,
+        `blueprint-file: replaced ${replacedCount} plugin/theme URL(s) to point at PR branch.`,
       );
     }
 

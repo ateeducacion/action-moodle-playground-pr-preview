@@ -68,7 +68,7 @@ The entire action is a single async IIFE. There are no separate modules, no Type
 3. Extract PR metadata: owner, repo, branch, SHA, etc.
 4. Determine blueprint source (priority order):
    a. User-provided `blueprint` JSON string -> validate and use as-is
-   b. `blueprint-file` -> read file, swap matching plugin URLs to PR branch, use modified JSON
+   b. `blueprint-file` -> read file, swap matching plugin/theme URLs (installMoodlePlugin + installTheme) to PR branch, use modified JSON
    c. `plugin-path` -> auto-generate blueprint via buildAutoBlueprint()
    d. `blueprint-url` -> use remote URL directly (no blueprint generation)
 5. Build preview URL:
@@ -97,7 +97,7 @@ The entire action is a single async IIFE. There are no separate modules, no Type
 |----------|-------|---------|
 | `sanitizeSlug(value, fallback)` | 85-92 | Lowercases and strips non-alphanumeric chars to create URL-safe slugs |
 | `buildAutoBlueprint()` | 98-120 | Generates Moodle blueprint JSON with `installMoodle` + `login` + `installMoodlePlugin` steps |
-| `buildBlueprintFromFile()` | 122-158 | Reads blueprint JSON from file, replaces `installMoodlePlugin` URLs matching current repo with PR branch URL |
+| `buildBlueprintFromFile()` | 122-158 | Reads blueprint JSON from file, replaces `installMoodlePlugin` and `installTheme` URLs matching current repo with PR branch URL |
 | `mergeVariables(...maps)` | 135-141 | Merges multiple objects into an uppercase-keyed template variable map |
 | `substitute(template, values)` | 143-161 | Replaces `{{VARIABLE}}` placeholders in templates; HTML-escapes all values except `PLAYGROUND_BUTTON` |
 | `performDescriptionUpdate()` | 219-255 | Updates PR body with managed block; respects user placeholders and removal preferences |
@@ -185,7 +185,7 @@ In `comment` mode, the action searches PR comments for one containing the hidden
 | `mode` | no | `append-to-description` | `append-to-description` or `comment` |
 | `playground-host` | no | `https://moodle-playground.com` | Base Moodle Playground URL |
 | `blueprint` | no | -- | Custom blueprint JSON string (overrides `blueprint-file` and `plugin-path`) |
-| `blueprint-file` | no | -- | Path to local blueprint JSON; auto-swaps plugin URLs for PR branch |
+| `blueprint-file` | no | -- | Path to local blueprint JSON; auto-swaps `installMoodlePlugin` and `installTheme` URLs for PR branch |
 | `blueprint-url` | no | -- | Remote blueprint URL |
 | `plugin-path` | no | -- | Path to plugin in repo (e.g., `.` for root) |
 | `moodle-version` | no | `5.0` | Moodle version for auto-generated blueprint |

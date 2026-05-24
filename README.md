@@ -102,7 +102,7 @@ steps:
       github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-The action finds all `installMoodlePlugin` steps whose `url` contains the current repository (`github.com/{owner}/{repo}`) and replaces them with the PR branch archive URL. This works correctly for PRs from forks too.
+The action finds all `installMoodlePlugin` and `installTheme` steps whose `url` contains the current repository (`github.com/{owner}/{repo}`) and replaces them with the PR branch archive URL. This works correctly for PRs from forks too.
 
 > **Note:** You must run `actions/checkout` before this step so the file is available.
 
@@ -151,7 +151,7 @@ Learn more about Moodle Playground blueprints in the [Moodle Playground document
 
 **Optional** Path to a local blueprint JSON file in the checked-out repository.
 
-When provided, the action reads the file, finds all `installMoodlePlugin` steps whose URL matches the current repository (`github.com/{owner}/{repo}`), and replaces those URLs with the PR branch archive URL. This allows you to maintain a rich blueprint in your repo (with courses, users, additional plugins, etc.) without needing an intermediate `github-script` step.
+When provided, the action reads the file, finds all `installMoodlePlugin` and `installTheme` steps whose URL matches the current repository (`github.com/{owner}/{repo}`), and replaces those URLs with the PR branch archive URL. This allows you to maintain a rich blueprint in your repo (with courses, users, additional plugins, etc.) without needing an intermediate `github-script` step.
 
 Requires `actions/checkout` before this step. Takes priority over `plugin-path` but is overridden by `blueprint`.
 
