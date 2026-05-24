@@ -57,6 +57,31 @@ export const substitute = (template, values) => {
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
+ * Returns true when `url` is a GitHub archive URL for a repository whose
+ * trailing path segment equals `repoName`, regardless of owner. Used by the
+ * blueprint-file rewriter so that a blueprint hosted under an upstream owner
+ * (e.g. `moodle-an-hochschulen/moodle-theme_boost_union`) is still recognized
+ * when the workflow runs from a fork of that repo (e.g. `someone/moodle-theme_boost_union`).
+ *
+ * The repo-name match is case-insensitive (GitHub treats repo URLs that way),
+ * and only `https://github.com/<owner>/<repo>/archive/...` style URLs are
+ * considered — anything else returns false so unrelated plugin URLs in the
+ * blueprint are not touched.
+ *
+ * @param {unknown} url
+ * @param {string} repoName
+ * @returns {boolean}
+ */
+export const isGithubArchiveUrlForRepo = (url, repoName) => {
+  if (typeof url !== "string" || !repoName) return false;
+  const pattern = new RegExp(
+    `^https?://github\\.com/[^/]+/${escapeRegex(repoName)}/archive/`,
+    "i",
+  );
+  return pattern.test(url);
+};
+
+/**
  * Returns a RegExp that matches the managed description block (between
  * `startMarker` and `endMarker`) plus a trailing run of whitespace. The body
  * between the markers is captured in group 1.

@@ -3,6 +3,7 @@ import * as core from "@actions/core";
 import * as githubLib from "@actions/github";
 import {
   computeNextDescriptionBody,
+  isGithubArchiveUrlForRepo,
   mergeVariables,
   removeManagedDescriptionBlockBody,
   sanitizeSlug,
@@ -179,7 +180,6 @@ const MODE_COMMENT = "comment";
       );
     }
 
-    const repoPattern = `github.com/${repoFullName}`;
     const prArchiveUrl = `https://github.com/${headRepoFullName}/archive/refs/heads/${headRef}.zip`;
     const rewritableSteps = new Set(["installMoodlePlugin", "installTheme"]);
     let replacedCount = 0;
@@ -188,8 +188,7 @@ const MODE_COMMENT = "comment";
       for (const step of blueprint.steps) {
         if (
           rewritableSteps.has(step.step) &&
-          typeof step.url === "string" &&
-          step.url.includes(repoPattern)
+          isGithubArchiveUrlForRepo(step.url, repoName)
         ) {
           core.info(
             `blueprint-file: replacing URL in ${step.step} step: ${step.url} -> ${prArchiveUrl}`,
@@ -202,7 +201,7 @@ const MODE_COMMENT = "comment";
 
     if (replacedCount === 0) {
       core.warning(
-        `blueprint-file: no installMoodlePlugin/installTheme steps found with URLs matching "${repoPattern}". The blueprint will be used as-is.`,
+        `blueprint-file: no installMoodlePlugin/installTheme steps found with github.com archive URLs for repo "${repoName}". The blueprint will be used as-is.`,
       );
     } else {
       core.info(

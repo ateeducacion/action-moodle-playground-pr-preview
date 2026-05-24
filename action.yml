@@ -15,7 +15,7 @@ inputs:
     description: Custom Moodle Playground Blueprint as a JSON string. When provided, `plugin-path` is ignored.
   blueprint-file:
     type: string
-    description: 'Path to a local blueprint JSON file (requires actions/checkout). The action auto-replaces installMoodlePlugin and installTheme URLs matching the current repo with the PR branch archive URL.'
+    description: 'Path to a local blueprint JSON file (requires actions/checkout). The action auto-replaces installMoodlePlugin and installTheme github.com archive URLs whose repo name matches the current repo (owner is ignored) with the PR branch archive URL.'
   blueprint-url:
     type: string
     description: 'URL pointing to a remote blueprint. When provided, the Playground link uses `?blueprint-url={url}` directly.'

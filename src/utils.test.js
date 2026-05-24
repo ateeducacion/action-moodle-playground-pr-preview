@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeNextDescriptionBody,
   descriptionBlockPattern,
+  isGithubArchiveUrlForRepo,
   mergeVariables,
   removeManagedDescriptionBlockBody,
   sanitizeSlug,
@@ -255,5 +256,84 @@ describe("removeManagedDescriptionBlockBody", () => {
   it("trims trailing whitespace after removal", () => {
     const body = `Top\n\n${BUTTON_BLOCK}`;
     expect(removeManagedDescriptionBlockBody(body, START, END)).toBe("Top");
+  });
+});
+
+describe("isGithubArchiveUrlForRepo", () => {
+  const repo = "moodle-theme_boost_union";
+
+  it("matches archive URLs under the same owner", () => {
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://github.com/erseco/${repo}/archive/refs/heads/main.zip`,
+        repo,
+      ),
+    ).toBe(true);
+  });
+
+  it("matches archive URLs under a different owner (fork/upstream case)", () => {
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://github.com/moodle-an-hochschulen/${repo}/archive/refs/heads/main.zip`,
+        repo,
+      ),
+    ).toBe(true);
+  });
+
+  it("matches refs/tags archive URLs as well", () => {
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://github.com/owner/${repo}/archive/refs/tags/v1.2.3.zip`,
+        repo,
+      ),
+    ).toBe(true);
+  });
+
+  it("is case-insensitive on the repo segment", () => {
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://github.com/Owner/Moodle-Theme_Boost_Union/archive/refs/heads/main.zip`,
+        repo,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects URLs for a different repo name", () => {
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://github.com/owner/moodle-mod_other/archive/refs/heads/main.zip`,
+        repo,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects non-archive github.com URLs", () => {
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://github.com/owner/${repo}/blob/main/README.md`,
+        repo,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects non-github hosts even if the path looks right", () => {
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://example.com/owner/${repo}/archive/refs/heads/main.zip`,
+        repo,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects non-string urls and empty repo names", () => {
+    expect(isGithubArchiveUrlForRepo(undefined, repo)).toBe(false);
+    expect(isGithubArchiveUrlForRepo(null, repo)).toBe(false);
+    expect(isGithubArchiveUrlForRepo(123, repo)).toBe(false);
+    expect(
+      isGithubArchiveUrlForRepo(
+        `https://github.com/owner/${repo}/archive/refs/heads/main.zip`,
+        "",
+      ),
+    ).toBe(false);
   });
 });

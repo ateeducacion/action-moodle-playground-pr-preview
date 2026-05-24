@@ -97,7 +97,7 @@ The entire action is a single async IIFE. There are no separate modules, no Type
 |----------|-------|---------|
 | `sanitizeSlug(value, fallback)` | 85-92 | Lowercases and strips non-alphanumeric chars to create URL-safe slugs |
 | `buildAutoBlueprint()` | 98-120 | Generates Moodle blueprint JSON with `installMoodle` + `login` + `installMoodlePlugin` steps |
-| `buildBlueprintFromFile()` | 122-158 | Reads blueprint JSON from file, replaces `installMoodlePlugin` and `installTheme` URLs matching current repo with PR branch URL |
+| `buildBlueprintFromFile()` | 122-158 | Reads blueprint JSON from file, replaces `installMoodlePlugin` and `installTheme` github.com archive URLs (matched by repo name, owner ignored) with PR branch URL |
 | `mergeVariables(...maps)` | 135-141 | Merges multiple objects into an uppercase-keyed template variable map |
 | `substitute(template, values)` | 143-161 | Replaces `{{VARIABLE}}` placeholders in templates; HTML-escapes all values except `PLAYGROUND_BUTTON` |
 | `performDescriptionUpdate()` | 219-255 | Updates PR body with managed block; respects user placeholders and removal preferences |
