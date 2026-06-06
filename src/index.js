@@ -2,9 +2,12 @@ import fs from "node:fs";
 import * as core from "@actions/core";
 import * as githubLib from "@actions/github";
 import {
+  buildProxyBlueprintUrl,
   computeNextDescriptionBody,
   isGithubArchiveUrlForRepo,
+  MAX_SAFE_PREVIEW_URL,
   mergeVariables,
+  previewUrlExceedsLimit,
   removeManagedDescriptionBlockBody,
   sanitizeSlug,
   substitute,
@@ -92,6 +95,9 @@ const MODE_COMMENT = "comment";
   ).trim();
   const blueprintUrlInput = (
     core.getInput("blueprint-url", { required: false }) || ""
+  ).trim();
+  const proxyUrlInput = (
+    core.getInput("proxy-url", { required: false }) || ""
   ).trim();
   const moodleVersion = (
     core.getInput("moodle-version", { required: false }) || "5.0"
@@ -231,11 +237,43 @@ const MODE_COMMENT = "comment";
   // URLSearchParams.get() decodes as a space, corrupting the payload before
   // the playground can read it. The playground accepts both variants.
   const blueprintBase64Url = blueprintJson ? toBase64Url(blueprintJson) : "";
-  const previewUrl = blueprintUrlInput
-    ? `${playgroundHost}?blueprint-url=${encodeURIComponent(blueprintUrlInput)}`
-    : blueprintBase64Url
-      ? `${playgroundHost}?blueprint=${blueprintBase64Url}`
-      : playgroundHost;
+
+  // Prefer a short ?blueprint-url= link. Order:
+  //   1. an explicit blueprint-url input (passed through verbatim);
+  //   2. blueprint-file + proxy-url: serve that file from the PR branch through
+  //      the github-proxy, so the URL stays short and the Playground derives
+  //      {{REPO}}/{{REF}} from it (the blueprint should use those placeholders);
+  //   3. otherwise inline the blueprint as base64 — which can overflow the URL
+  //      length limit and 414 for large blueprints, so warn past a threshold.
+  let previewUrl;
+  if (blueprintUrlInput) {
+    previewUrl = `${playgroundHost}?blueprint-url=${encodeURIComponent(
+      blueprintUrlInput,
+    )}`;
+  } else if (blueprintFileInput && proxyUrlInput) {
+    const proxied = buildProxyBlueprintUrl(
+      proxyUrlInput,
+      headRepoFullName,
+      headRef,
+      blueprintFileInput,
+    );
+    previewUrl = `${playgroundHost}?blueprint-url=${encodeURIComponent(proxied)}`;
+    core.info(
+      `Serving blueprint-file via proxy as ?blueprint-url=: ${proxied}`,
+    );
+  } else if (blueprintBase64Url) {
+    previewUrl = `${playgroundHost}?blueprint=${blueprintBase64Url}`;
+    if (previewUrlExceedsLimit(previewUrl)) {
+      core.warning(
+        `Preview URL is ${previewUrl.length} chars (> ${MAX_SAFE_PREVIEW_URL}); ` +
+          "a web server may reject it with HTTP 414 (URI Too Long). Use the " +
+          "`blueprint-url` input, or combine `blueprint-file` with `proxy-url` " +
+          "to emit a short ?blueprint-url= link served through the github-proxy.",
+      );
+    }
+  } else {
+    previewUrl = playgroundHost;
+  }
 
   const defaultButtonImageUrl =
     "https://raw.githubusercontent.com/ateeducacion/action-moodle-playground-pr-preview/refs/heads/main/assets/playground-preview-button.svg";

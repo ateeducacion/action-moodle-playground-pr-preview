@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProxyBlueprintUrl,
   computeNextDescriptionBody,
   descriptionBlockPattern,
   isGithubArchiveUrlForRepo,
+  MAX_SAFE_PREVIEW_URL,
   mergeVariables,
+  previewUrlExceedsLimit,
   removeManagedDescriptionBlockBody,
   sanitizeSlug,
   substitute,
@@ -335,5 +338,55 @@ describe("isGithubArchiveUrlForRepo", () => {
         "",
       ),
     ).toBe(false);
+  });
+});
+
+describe("previewUrlExceedsLimit", () => {
+  it("is false for short URLs and true past the threshold", () => {
+    expect(
+      previewUrlExceedsLimit("https://moodle-playground.com?blueprint=AB"),
+    ).toBe(false);
+    expect(previewUrlExceedsLimit(`x${"A".repeat(MAX_SAFE_PREVIEW_URL)}`)).toBe(
+      true,
+    );
+  });
+
+  it("honours a custom max and ignores non-strings", () => {
+    expect(previewUrlExceedsLimit("abcdef", 5)).toBe(true);
+    expect(previewUrlExceedsLimit("abc", 5)).toBe(false);
+    expect(previewUrlExceedsLimit(null)).toBe(false);
+    expect(previewUrlExceedsLimit(undefined)).toBe(false);
+  });
+});
+
+describe("buildProxyBlueprintUrl", () => {
+  it("builds a ?repo=&branch=&path= proxy URL the Playground can parse", () => {
+    const url = buildProxyBlueprintUrl(
+      "https://github-proxy.exelearning.dev/",
+      "ateeducacion/mod_exelearning",
+      "feat/x",
+      "blueprint.json",
+    );
+    const parsed = new URL(url);
+    expect(parsed.origin + parsed.pathname).toBe(
+      "https://github-proxy.exelearning.dev/",
+    );
+    expect(parsed.searchParams.get("repo")).toBe(
+      "ateeducacion/mod_exelearning",
+    );
+    expect(parsed.searchParams.get("branch")).toBe("feat/x");
+    expect(parsed.searchParams.get("path")).toBe("blueprint.json");
+  });
+
+  it("normalizes a trailing-slash-less base and a leading ./ in the path", () => {
+    const url = buildProxyBlueprintUrl(
+      "https://proxy.example",
+      "owner/repo",
+      "main",
+      "./blueprint.json",
+    );
+    const parsed = new URL(url);
+    expect(parsed.origin + parsed.pathname).toBe("https://proxy.example/");
+    expect(parsed.searchParams.get("path")).toBe("blueprint.json");
   });
 });

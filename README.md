@@ -159,6 +159,45 @@ Requires `actions/checkout` before this step. Takes priority over `plugin-path` 
 
 **Optional** URL pointing to a remote blueprint JSON file.
 
+### `proxy-url`
+
+**Optional** Base URL of a github-proxy able to serve a single repo file with
+CORS (its `?repo=&branch=&path=` mode, e.g.
+`https://github-proxy.exelearning.dev/`).
+
+When set **together with `blueprint-file`**, the preview links to that file on
+the PR branch via `?blueprint-url=` instead of inlining the blueprint as base64.
+This keeps the URL short and avoids **HTTP 414 (URI Too Long)** on large
+blueprints (see [Large blueprints](#large-blueprints--http-414)).
+
+The Moodle Playground derives `{{REPO}}`/`{{REF}}` constants from the proxied
+URL, so the blueprint should use those placeholders for the plugin install step
+so it targets the PR branch:
+
+```json
+{
+  "constants": { "REPO": "owner/moodle-mod_myplugin", "REF": "main" },
+  "steps": [
+    {
+      "step": "installMoodlePlugin",
+      "url": "https://github.com/{{REPO}}/archive/refs/heads/{{REF}}.zip"
+    }
+  ]
+}
+```
+
+```yaml
+with:
+  blueprint-file: blueprint.json
+  proxy-url: https://github-proxy.exelearning.dev/
+  github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+> Note: with `proxy-url` the file is served as-is (no in-place URL rewrite), so
+> the PR-branch targeting comes from the `{{REPO}}`/`{{REF}}` placeholders, not
+> from the `installMoodlePlugin` URL rewrite that the plain `blueprint-file` path
+> performs.
+
 ### `plugin-path`
 
 **Optional** Path to plugin directory inside the repository.
@@ -248,6 +287,23 @@ Ensure the PR branch is pushed to the remote. The GitHub archive URL needs the b
 ### Workflow fails with "Resource not accessible by integration"
 
 Add the permissions block with `pull-requests: write` and `contents: read` to your workflow.
+
+### Large blueprints / HTTP 414
+
+By default `blueprint` / `blueprint-file` / `plugin-path` inline the whole
+blueprint as base64 in `?blueprint=`. For large blueprints the resulting URL can
+exceed common web-server request-line limits (nginx defaults to 8 KB), so the
+preview link returns **HTTP 414 (URI Too Long)** and the Playground never loads.
+The action logs a warning when it builds a `?blueprint=` link past ~8000 chars.
+
+To keep the link short, use one of:
+
+- **`blueprint-url`** — point at a remote blueprint JSON served with CORS
+  (e.g. through a github-proxy). Passed through verbatim.
+- **`blueprint-file` + [`proxy-url`](#proxy-url)** — the action references the
+  file on the PR branch through the proxy (`?blueprint-url=…&path=…`), and the
+  Playground resolves `{{REPO}}`/`{{REF}}` so the plugin installs from the PR
+  branch. This is the recommended option for rich, committed blueprints.
 
 ## License
 

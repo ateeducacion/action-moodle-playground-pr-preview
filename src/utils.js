@@ -164,3 +164,50 @@ export const removeManagedDescriptionBlockBody = (
   }
   return body.replace(pattern, "").trimEnd();
 };
+
+/**
+ * Largest preview-URL length (in characters) considered safe before web servers
+ * start rejecting the request line. nginx's default `large_client_header_buffers`
+ * caps the request line at 8 KB, so we warn a little under that.
+ *
+ * @type {number}
+ */
+export const MAX_SAFE_PREVIEW_URL = 8000;
+
+/**
+ * Returns true when an inline `?blueprint=` preview URL is long enough that a
+ * web server may reject it with HTTP 414 (URI Too Long).
+ *
+ * @param {string} url
+ * @param {number} [max=MAX_SAFE_PREVIEW_URL]
+ * @returns {boolean}
+ */
+export const previewUrlExceedsLimit = (url, max = MAX_SAFE_PREVIEW_URL) =>
+  typeof url === "string" && url.length > max;
+
+/**
+ * Build a github-proxy URL that serves a single repo file (e.g. a branch's
+ * `blueprint.json`) with CORS, so a preview can reference it via
+ * `?blueprint-url=` instead of inlining the whole blueprint as base64 (which
+ * overflows the URL limit for large blueprints — HTTP 414).
+ *
+ * The Moodle Playground derives `{{REPO}}`/`{{REF}}` constants from this URL, so
+ * a blueprint that uses those placeholders installs from the PR branch.
+ *
+ * @param {string} proxyBase Base URL of the proxy, e.g. "https://github-proxy.exelearning.dev/".
+ * @param {string} repoFullName "owner/repo" to serve the file from.
+ * @param {string} ref Branch, tag, or commit.
+ * @param {string} filePath Path within the repo, e.g. "blueprint.json".
+ * @returns {string}
+ */
+export const buildProxyBlueprintUrl = (
+  proxyBase,
+  repoFullName,
+  ref,
+  filePath,
+) => {
+  const base = String(proxyBase).replace(/\/+$/, "");
+  const path = String(filePath).replace(/^\.?\/+/, "");
+  const query = new URLSearchParams({ repo: repoFullName, branch: ref, path });
+  return `${base}/?${query.toString()}`;
+};
