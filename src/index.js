@@ -2,6 +2,19 @@ import fs from "node:fs";
 import * as core from "@actions/core";
 import * as githubLib from "@actions/github";
 import {
+  assertCorePrMode,
+  buildCoreOverlayBlueprint,
+  changedFileToOverlayEntry,
+  classifyCoreWarnings,
+  DEFAULT_MAX_CORE_FILE_BYTES,
+  DEFAULT_MAX_CORE_FILES,
+  isBinaryPath,
+  mapBaseRefToVersion,
+  normalizeRunUpgrade,
+  resolvePreviewType,
+  validateCorePath,
+} from "./core-overlay.js";
+import {
   buildProxyBlueprintUrl,
   computeNextDescriptionBody,
   isGithubArchiveUrlForRepo,
@@ -103,7 +116,46 @@ const MODE_COMMENT = "comment";
     core.getInput("moodle-version", { required: false }) || "5.0"
   ).trim();
 
+  // ── Core PR overlay inputs (preview-type: auto | plugin | core) ──
+  const parseIntInput = (raw, fallback) => {
+    const n = parseInt(String(raw ?? "").trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  const previewTypeInput = (
+    core.getInput("preview-type", { required: false }) || "auto"
+  ).trim();
+  const baseVersionInput = (
+    core.getInput("base-version", { required: false }) || ""
+  ).trim();
+  const runUpgradeInput = (
+    core.getInput("run-upgrade", { required: false }) || "auto"
+  ).trim();
+  const coreRootInput = (
+    core.getInput("core-root", { required: false }) || "/www/moodle"
+  ).trim();
+  const corePrMode = (
+    core.getInput("core-pr-mode", { required: false }) || "files"
+  )
+    .trim()
+    .toLowerCase();
+  const maxCoreFiles = parseIntInput(
+    core.getInput("max-core-files", { required: false }),
+    DEFAULT_MAX_CORE_FILES,
+  );
+  const maxCoreFileBytes = parseIntInput(
+    core.getInput("max-core-file-bytes", { required: false }),
+    DEFAULT_MAX_CORE_FILE_BYTES,
+  );
+  const allowCoreBinary =
+    (core.getInput("allow-core-binary-files", { required: false }) || "false")
+      .trim()
+      .toLowerCase() === "true";
+
+  const previewType = resolvePreviewType(previewTypeInput, repoFullName);
+  core.info(`Resolved preview type: ${previewType}`);
+
   if (
+    previewType !== "core" &&
     !pluginPath &&
     !blueprintInput &&
     !blueprintFileInput &&
@@ -218,8 +270,104 @@ const MODE_COMMENT = "comment";
     return JSON.stringify(blueprint);
   };
 
+  // Resolve a Moodle core PR overlay: fetch the changed files, sanitize and
+  // convert them into an applyPrOverlay manifest, and build the blueprint. The
+  // action never checks out or executes PR head code; it only reads metadata.
+  const resolveCorePreview = async () => {
+    assertCorePrMode(corePrMode);
+
+    const baseVersion = baseVersionInput || mapBaseRefToVersion(baseRef);
+    if (!baseVersion) {
+      throw new Error(
+        `No Moodle Playground base mapping for target branch "${baseRef}". ` +
+          "Set the `base-version` input (e.g. 5.1) to override.",
+      );
+    }
+    const runUpgrade = normalizeRunUpgrade(runUpgradeInput);
+
+    // Fetch all changed files, following pagination.
+    const allFiles = [];
+    let page = 1;
+    while (true) {
+      const { data: batch } = await github.rest.pulls.listFiles({
+        owner,
+        repo: repoName,
+        pull_number: prNumber,
+        per_page: 100,
+        page,
+      });
+      allFiles.push(...batch);
+      if (batch.length < 100) break;
+      page++;
+    }
+
+    if (allFiles.length > maxCoreFiles) {
+      throw new Error(
+        `This PR changes ${allFiles.length} files, exceeding max-core-files=${maxCoreFiles}. ` +
+          "Raise the limit or preview a smaller change.",
+      );
+    }
+
+    const manifest = [];
+    const skipped = [];
+    for (const file of allFiles) {
+      const reason = validateCorePath(file.filename);
+      if (reason) {
+        skipped.push({ path: String(file.filename), reason });
+        continue;
+      }
+      if (!allowCoreBinary && isBinaryPath(file.filename)) {
+        skipped.push({
+          path: file.filename,
+          reason: "binary file (not allowed)",
+        });
+        continue;
+      }
+      manifest.push(
+        changedFileToOverlayEntry(file, {
+          headRepoFullName,
+          headSha,
+        }),
+      );
+    }
+
+    if (skipped.length) {
+      core.warning(
+        `Skipped ${skipped.length} file(s) in the core overlay preview: ` +
+          skipped.map((s) => `${s.path} (${s.reason})`).join(", "),
+      );
+    }
+
+    const warnings = classifyCoreWarnings(allFiles);
+    for (const w of warnings) core.warning(w);
+
+    const blueprint = buildCoreOverlayBlueprint({
+      baseVersion,
+      baseRef,
+      runUpgrade,
+      coreRoot: coreRootInput,
+      prNumber,
+      files: manifest,
+      maxFiles: maxCoreFiles,
+      maxFileBytes: maxCoreFileBytes,
+    });
+
+    return {
+      blueprintJson: JSON.stringify(blueprint),
+      baseVersion,
+      runUpgrade,
+      warnings,
+      skipped,
+      changedCount: manifest.length,
+    };
+  };
+
+  let corePreview = null;
   let blueprintJson = "";
-  if (blueprintInput) {
+  if (previewType === "core") {
+    corePreview = await resolveCorePreview();
+    blueprintJson = corePreview.blueprintJson;
+  } else if (blueprintInput) {
     blueprintJson = blueprintInput;
     try {
       JSON.parse(blueprintJson);
@@ -300,6 +448,63 @@ const MODE_COMMENT = "comment";
     "{{PLAYGROUND_BUTTON}}",
   ].join("\n");
 
+  // Core overlay caveats, rendered as plain-text bullet lists. They are exposed
+  // as {{CORE_WARNINGS}} / {{CORE_SKIPPED_FILES}} so substitute() HTML-escapes
+  // any PR-derived path; the surrounding Markdown structure lives in the static
+  // template text below.
+  const coreWarningsText = corePreview
+    ? corePreview.warnings.map((w) => `- ${w}`).join("\n")
+    : "";
+  const coreSkippedText = corePreview
+    ? corePreview.skipped.map((s) => `- ${s.path} (${s.reason})`).join("\n")
+    : "";
+
+  // Build the core caveats section only when there is something to warn about.
+  const coreCaveatsLines = [];
+  if (coreWarningsText) {
+    coreCaveatsLines.push("", "**Preview caveats:**", "", "{{CORE_WARNINGS}}");
+  }
+  if (coreSkippedText) {
+    coreCaveatsLines.push(
+      "",
+      `**Skipped files (${corePreview.skipped.length}):**`,
+      "",
+      "{{CORE_SKIPPED_FILES}}",
+    );
+  }
+
+  const coreNote =
+    "> Note: this preview applies file changes at runtime over a prebuilt base. " +
+    "Changes requiring Composer, frontend builds, generated assets, database " +
+    "upgrades, or a full Moodle bundle rebuild may not be fully represented.";
+
+  const coreDefaultDescriptionTemplate = [
+    "<hr>",
+    "### Moodle Playground Preview",
+    "",
+    "This pull request can be previewed in Moodle Playground by loading the " +
+      "prebuilt Moodle base for `{{CORE_BASE_REF}}` and applying the changed " +
+      "files from commit `{{PR_HEAD_SHA}}`.",
+    "",
+    "{{PLAYGROUND_BUTTON}}",
+    "",
+    coreNote,
+    ...coreCaveatsLines,
+  ].join("\n");
+
+  const coreDefaultCommentTemplate = [
+    "### Moodle Playground Preview",
+    "",
+    "This pull request can be previewed in Moodle Playground by loading the " +
+      "prebuilt Moodle base for `{{CORE_BASE_REF}}` and applying the changed " +
+      "files from commit `{{PR_HEAD_SHA}}`.",
+    "",
+    "{{PLAYGROUND_BUTTON}}",
+    "",
+    coreNote,
+    ...coreCaveatsLines,
+  ].join("\n");
+
   const templateVariables = mergeVariables(
     {
       PR_NUMBER: String(prNumber),
@@ -315,21 +520,43 @@ const MODE_COMMENT = "comment";
       PLUGIN_SLUG: pluginSlug,
       MOODLE_VERSION: moodleVersion,
       PLAYGROUND_HOST: playgroundHost,
+      PREVIEW_TYPE: previewType,
     },
     {
       PLAYGROUND_URL: previewUrl,
       PLAYGROUND_BLUEPRINT_JSON: blueprintJson,
       EXTRA_TEXT: extraText,
     },
+    // Core-only template variables (empty strings in plugin mode).
+    corePreview
+      ? {
+          CORE_BASE_REF: baseRef,
+          CORE_BASE_VERSION: corePreview.baseVersion,
+          CORE_HEAD_SHA: headSha,
+          CORE_HEAD_REPO: headRepoFullName,
+          CORE_CHANGED_FILES: String(corePreview.changedCount),
+          CORE_SKIPPED_FILES: coreSkippedText,
+          CORE_WARNINGS: coreWarningsText,
+          CORE_RUN_UPGRADE: corePreview.runUpgrade,
+        }
+      : {},
   );
   templateVariables.PLAYGROUND_BUTTON = substitute(
     defaultButtonTemplate,
     templateVariables,
   );
 
-  const descriptionTemplate =
-    descriptionTemplateInput || defaultDescriptionTemplate;
-  const commentTemplate = commentTemplateInput || defaultCommentTemplate;
+  const defaultDescription =
+    previewType === "core"
+      ? coreDefaultDescriptionTemplate
+      : defaultDescriptionTemplate;
+  const defaultComment =
+    previewType === "core"
+      ? coreDefaultCommentTemplate
+      : defaultCommentTemplate;
+
+  const descriptionTemplate = descriptionTemplateInput || defaultDescription;
+  const commentTemplate = commentTemplateInput || defaultComment;
 
   let renderedDescription =
     mode === MODE_APPEND

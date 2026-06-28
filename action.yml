@@ -36,6 +36,37 @@ inputs:
     type: string
     description: 'Moodle version for the blueprint (e.g., "5.0", "4.4")'
     default: '5.0'
+  preview-type:
+    type: string
+    description: 'Preview type: auto, plugin, or core'
+    default: auto
+  base-version:
+    type: string
+    description: Override Moodle Playground base version for core PR overlay previews
+  run-upgrade:
+    type: string
+    description: 'Upgrade handling for core PR overlays: off, on, or auto'
+    default: auto
+  core-root:
+    type: string
+    description: Moodle filesystem root inside Moodle Playground
+    default: /www/moodle
+  max-core-files:
+    type: string
+    description: Maximum number of changed files allowed in core overlay previews
+    default: '80'
+  max-core-file-bytes:
+    type: string
+    description: Maximum size in bytes per changed file for core overlay previews
+    default: '262144'
+  allow-core-binary-files:
+    type: boolean
+    description: Whether to allow binary files in core overlay previews
+    default: false
+  core-pr-mode:
+    type: string
+    description: How to apply Moodle core PR changes. Currently only files is supported.
+    default: files
   description-template:
     type: string
     description: Custom markdown/HTML template for PR descriptions (supports {{VARIABLE_NAME}} interpolation)

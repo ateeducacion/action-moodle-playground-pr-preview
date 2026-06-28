@@ -124,6 +124,29 @@ with:
   playground-host: https://my-org.github.io/moodle-playground
 ```
 
+### Moodle core PR overlay preview
+
+Preview a **Moodle core** pull request by booting the prebuilt Moodle base for the PR's
+target branch and overlaying the PR's changed files at runtime (whole-file replacement). No
+per-PR bundle is built. On `moodle/moodle`, `preview-type: auto` selects this automatically.
+
+```yaml
+with:
+  preview-type: core
+  run-upgrade: auto
+```
+
+The action reads the PR's changed files via the GitHub API, sanitizes their paths, and emits a
+blueprint whose `applyPrOverlay` step fetches each file's final contents at the PR head commit
+(`raw.githubusercontent.com`). The base Moodle version is inferred from the PR target branch (see
+`base-version` to override). Changes requiring Composer, frontend builds, generated assets, or a
+full database upgrade may not be fully represented; the action surfaces these as caveats.
+
+> Security: the action only reads PR metadata and posts a link. It never checks out or executes
+> PR head code. PR code runs only later, in the reviewer's browser/WASM runtime. If you trigger
+> this with `pull_request_target`, do **not** add a checkout-and-run of the PR head in that
+> privileged context.
+
 ## Inputs
 
 ### `mode`
@@ -210,6 +233,64 @@ The action generates a GitHub archive URL for the PR branch and creates an `inst
 
 **Default:** `5.0`
 
+### `preview-type`
+
+**Optional** Which kind of preview to generate.
+
+- `auto` (default) -- `core` when the repository is `moodle/moodle`, otherwise `plugin`.
+- `plugin` -- existing plugin-preview behavior (unchanged).
+- `core` -- Moodle core PR overlay preview.
+
+### `base-version`
+
+**Optional** Override the Moodle Playground base version for core overlay previews. When unset,
+the base is inferred from the PR target branch:
+
+| Target branch (`base.ref`) | Base version |
+|----------------------------|--------------|
+| `MOODLE_404_STABLE`        | 4.4 |
+| `MOODLE_405_STABLE`        | 4.5 |
+| `MOODLE_500_STABLE`        | 5.0 |
+| `MOODLE_501_STABLE`        | 5.1 |
+| `MOODLE_502_STABLE`        | 5.2 |
+| `main` / `master`          | dev |
+
+If there is no mapping and `base-version` is unset, the action fails with a helpful message.
+
+### `run-upgrade`
+
+**Optional** Upgrade handling for core overlay previews: `off`, `on`, or `auto`.
+
+**Default:** `auto` (runs the upgrade only when a changed file is `version.php`,
+`public/version.php`, or a `db/install.*` / `db/upgrade.php`). The runtime upgrade is a
+best-effort attempt; SQLite/WASM fidelity is lower than a full Moodle Docker/Codespaces
+environment.
+
+### `core-root`
+
+**Optional** Moodle filesystem root the overlay writes into. **Default:** `/www/moodle`. The
+`public/` prefix (Moodle 5.1+) comes from the PR path and is never auto-prepended.
+
+### `max-core-files`
+
+**Optional** Maximum number of changed files allowed in a core overlay preview. **Default:** `80`.
+The action fails if the PR changes more files than this.
+
+### `max-core-file-bytes`
+
+**Optional** Per-file byte cap, enforced at runtime when fetching each file. **Default:** `262144`
+(256 KiB).
+
+### `allow-core-binary-files`
+
+**Optional** Whether to include binary files in the overlay. **Default:** `false` (binary files are
+skipped and reported as caveats).
+
+### `core-pr-mode`
+
+**Optional** How to apply core PR changes. Only `files` (a pre-resolved manifest) is supported;
+any other value fails. **Default:** `files`.
+
 ### `description-template`
 
 **Optional** Custom markdown/HTML template for PR descriptions. Supports `{{VARIABLE_NAME}}` interpolation.
@@ -224,6 +305,10 @@ The action generates a GitHub archive URL for the PR branch and creates an `inst
 - `{{PLUGIN_PATH}}`, `{{PLUGIN_SLUG}}`
 - `{{MOODLE_VERSION}}`
 - `{{EXTRA_TEXT}}`
+- `{{PREVIEW_TYPE}}` - `plugin` or `core`
+- Core overlay only: `{{CORE_BASE_REF}}`, `{{CORE_BASE_VERSION}}`, `{{CORE_HEAD_SHA}}`,
+  `{{CORE_HEAD_REPO}}`, `{{CORE_CHANGED_FILES}}`, `{{CORE_SKIPPED_FILES}}`, `{{CORE_WARNINGS}}`,
+  `{{CORE_RUN_UPGRADE}}`
 
 ### `comment-template`
 

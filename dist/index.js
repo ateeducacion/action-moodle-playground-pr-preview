@@ -5218,6 +5218,8 @@ function defaultFactory (origin, opts) {
 
 class Agent extends DispatcherBase {
   constructor ({ factory = defaultFactory, maxRedirections = 0, connect, ...options } = {}) {
+    super()
+
     if (typeof factory !== 'function') {
       throw new InvalidArgumentError('factory must be a function.')
     }
@@ -5229,8 +5231,6 @@ class Agent extends DispatcherBase {
     if (!Number.isInteger(maxRedirections) || maxRedirections < 0) {
       throw new InvalidArgumentError('maxRedirections must be a positive number')
     }
-
-    super(options)
 
     if (connect && typeof connect !== 'function') {
       connect = { ...connect }
@@ -5603,9 +5603,6 @@ const EMPTY_BUF = Buffer.alloc(0)
 const FastBuffer = Buffer[Symbol.species]
 const addListener = util.addListener
 const removeAllListeners = util.removeAllListeners
-const kIdleSocketValidation = Symbol('kIdleSocketValidation')
-const kIdleSocketValidationTimeout = Symbol('kIdleSocketValidationTimeout')
-const kSocketUsed = Symbol('kSocketUsed')
 
 let extractBody
 
@@ -5828,69 +5825,27 @@ class Parser {
 
       const offset = llhttp.llhttp_get_error_pos(this.ptr) - currentBufferPtr
 
-      if (ret !== constants.ERROR.OK) {
-        const body = data.subarray(offset)
-
-        if (ret === constants.ERROR.PAUSED_UPGRADE) {
-          this.onUpgrade(body)
-        } else if (ret === constants.ERROR.PAUSED) {
-          this.paused = true
-          socket.unshift(body)
-        } else {
-          throw this.createError(ret, body)
+      if (ret === constants.ERROR.PAUSED_UPGRADE) {
+        this.onUpgrade(data.slice(offset))
+      } else if (ret === constants.ERROR.PAUSED) {
+        this.paused = true
+        socket.unshift(data.slice(offset))
+      } else if (ret !== constants.ERROR.OK) {
+        const ptr = llhttp.llhttp_get_error_reason(this.ptr)
+        let message = ''
+        /* istanbul ignore else: difficult to make a test case for */
+        if (ptr) {
+          const len = new Uint8Array(llhttp.memory.buffer, ptr).indexOf(0)
+          message =
+            'Response does not match the HTTP/1.1 protocol (' +
+            Buffer.from(llhttp.memory.buffer, ptr, len).toString() +
+            ')'
         }
+        throw new HTTPParserError(message, constants.ERROR[ret], data.slice(offset))
       }
     } catch (err) {
       util.destroy(socket, err)
     }
-  }
-
-  finish () {
-    assert(currentParser === null)
-    assert(this.ptr != null)
-    assert(!this.paused)
-
-    const { llhttp } = this
-
-    let ret
-
-    try {
-      currentParser = this
-      ret = llhttp.llhttp_finish(this.ptr)
-    } finally {
-      currentParser = null
-    }
-
-    if (ret === constants.ERROR.OK) {
-      return null
-    }
-
-    if (ret === constants.ERROR.PAUSED || ret === constants.ERROR.PAUSED_UPGRADE) {
-      this.paused = true
-      return null
-    }
-
-    return this.createError(ret, EMPTY_BUF)
-  }
-
-  createError (ret, data) {
-    const { llhttp, contentLength, bytesRead } = this
-
-    if (contentLength && bytesRead !== parseInt(contentLength, 10)) {
-      return new ResponseContentLengthMismatchError()
-    }
-
-    const ptr = llhttp.llhttp_get_error_reason(this.ptr)
-    let message = ''
-    if (ptr) {
-      const len = new Uint8Array(llhttp.memory.buffer, ptr).indexOf(0)
-      message =
-        'Response does not match the HTTP/1.1 protocol (' +
-        Buffer.from(llhttp.memory.buffer, ptr, len).toString() +
-        ')'
-    }
-
-    return new HTTPParserError(message, constants.ERROR[ret], data)
   }
 
   destroy () {
@@ -5917,11 +5872,6 @@ class Parser {
 
     /* istanbul ignore next: difficult to make a test case for */
     if (socket.destroyed) {
-      return -1
-    }
-
-    if (client[kRunning] === 0) {
-      util.destroy(socket, new SocketError('bad response', util.getSocketInfo(socket)))
       return -1
     }
 
@@ -6025,11 +5975,6 @@ class Parser {
 
     /* istanbul ignore next: difficult to make a test case for */
     if (socket.destroyed) {
-      return -1
-    }
-
-    if (client[kRunning] === 0) {
-      util.destroy(socket, new SocketError('bad response', util.getSocketInfo(socket)))
       return -1
     }
 
@@ -6206,7 +6151,6 @@ class Parser {
     request.onComplete(headers)
 
     client[kQueue][client[kRunningIdx]++] = null
-    socket[kSocketUsed] = true
 
     if (socket[kWriting]) {
       assert(client[kRunning] === 0)
@@ -6265,9 +6209,6 @@ async function connectH1 (client, socket) {
   socket[kWriting] = false
   socket[kReset] = false
   socket[kBlocking] = false
-  socket[kIdleSocketValidation] = 0
-  socket[kIdleSocketValidationTimeout] = null
-  socket[kSocketUsed] = false
   socket[kParser] = new Parser(client, socket, llhttpInstance)
 
   addListener(socket, 'error', function (err) {
@@ -6278,11 +6219,8 @@ async function connectH1 (client, socket) {
     // On Mac OS, we get an ECONNRESET even if there is a full body to be forwarded
     // to the user.
     if (err.code === 'ECONNRESET' && parser.statusCode && !parser.shouldKeepAlive) {
-      const parserErr = parser.finish()
-      if (parserErr) {
-        this[kError] = parserErr
-        this[kClient][kOnError](parserErr)
-      }
+      // We treat all incoming data so for as a valid response.
+      parser.onMessageComplete()
       return
     }
 
@@ -6301,10 +6239,8 @@ async function connectH1 (client, socket) {
     const parser = this[kParser]
 
     if (parser.statusCode && !parser.shouldKeepAlive) {
-      const parserErr = parser.finish()
-      if (parserErr) {
-        util.destroy(this, parserErr)
-      }
+      // We treat all incoming data so far as a valid response.
+      parser.onMessageComplete()
       return
     }
 
@@ -6314,11 +6250,10 @@ async function connectH1 (client, socket) {
     const client = this[kClient]
     const parser = this[kParser]
 
-    clearIdleSocketValidation(this)
-
     if (parser) {
       if (!this[kError] && parser.statusCode && !parser.shouldKeepAlive) {
-        this[kError] = parser.finish() || this[kError]
+        // We treat all incoming data so far as a valid response.
+        parser.onMessageComplete()
       }
 
       this[kParser].destroy()
@@ -6381,7 +6316,7 @@ async function connectH1 (client, socket) {
       return socket.destroyed
     },
     busy (request) {
-      if (socket[kWriting] || socket[kReset] || socket[kBlocking] || socket[kIdleSocketValidation] === 1) {
+      if (socket[kWriting] || socket[kReset] || socket[kBlocking]) {
         return true
       }
 
@@ -6419,31 +6354,6 @@ async function connectH1 (client, socket) {
   }
 }
 
-function clearIdleSocketValidation (socket) {
-  if (socket[kIdleSocketValidationTimeout]) {
-    clearTimeout(socket[kIdleSocketValidationTimeout])
-    socket[kIdleSocketValidationTimeout] = null
-  }
-
-  socket[kIdleSocketValidation] = 0
-}
-
-function scheduleIdleSocketValidation (client, socket) {
-  socket[kIdleSocketValidation] = 1
-  socket[kIdleSocketValidationTimeout] = setTimeout(() => {
-    socket[kIdleSocketValidationTimeout] = null
-    socket[kIdleSocketValidation] = 2
-
-    if (client[kSocket] === socket && !socket.destroyed) {
-      client[kResume]()
-    }
-  }, 0)
-  socket[kIdleSocketValidationTimeout].unref?.()
-}
-
-/**
- * @param {import('./client.js')} client
- */
 function resumeH1 (client) {
   const socket = client[kSocket]
 
@@ -6456,32 +6366,6 @@ function resumeH1 (client) {
     } else if (socket[kNoRef] && socket.ref) {
       socket.ref()
       socket[kNoRef] = false
-    }
-
-    if (client[kRunning] === 0 && client[kPending] > 0 && socket[kSocketUsed]) {
-      if (socket[kIdleSocketValidation] === 0) {
-        scheduleIdleSocketValidation(client, socket)
-        socket[kParser].readMore()
-        if (socket.destroyed) {
-          return
-        }
-        return
-      }
-
-      if (socket[kIdleSocketValidation] === 1) {
-        socket[kParser].readMore()
-        if (socket.destroyed) {
-          return
-        }
-        return
-      }
-    }
-
-    if (client[kRunning] === 0) {
-      socket[kParser].readMore()
-      if (socket.destroyed) {
-        return
-      }
     }
 
     if (client[kSize] === 0) {
@@ -6577,7 +6461,6 @@ function writeH1 (client, request) {
   }
 
   const socket = client[kSocket]
-  clearIdleSocketValidation(socket)
 
   const abort = (err) => {
     if (request.aborted || request.completed) {
@@ -7897,10 +7780,9 @@ class Client extends DispatcherBase {
     autoSelectFamilyAttemptTimeout,
     // h2
     maxConcurrentStreams,
-    allowH2,
-    webSocket
+    allowH2
   } = {}) {
-    super({ webSocket })
+    super()
 
     if (keepAlive !== undefined) {
       throw new InvalidArgumentError('unsupported keepAlive, use pipelining=0 instead')
@@ -8432,24 +8314,15 @@ const { kDestroy, kClose, kClosed, kDestroyed, kDispatch, kInterceptors } = __nc
 const kOnDestroyed = Symbol('onDestroyed')
 const kOnClosed = Symbol('onClosed')
 const kInterceptedDispatch = Symbol('Intercepted Dispatch')
-const kWebSocketOptions = Symbol('webSocketOptions')
 
 class DispatcherBase extends Dispatcher {
-  constructor (opts) {
+  constructor () {
     super()
 
     this[kDestroyed] = false
     this[kOnDestroyed] = null
     this[kClosed] = false
     this[kOnClosed] = []
-    this[kWebSocketOptions] = opts?.webSocket ?? {}
-  }
-
-  get webSocketOptions () {
-    return {
-      maxFragments: this[kWebSocketOptions].maxFragments ?? 131072,
-      maxPayloadSize: this[kWebSocketOptions].maxPayloadSize ?? 128 * 1024 * 1024
-    }
   }
 
   get destroyed () {
@@ -9009,8 +8882,8 @@ const kRemoveClient = Symbol('remove client')
 const kStats = Symbol('stats')
 
 class PoolBase extends DispatcherBase {
-  constructor (opts) {
-    super(opts)
+  constructor () {
+    super()
 
     this[kQueue] = new FixedQueue()
     this[kClients] = []
@@ -9269,6 +9142,8 @@ class Pool extends PoolBase {
     allowH2,
     ...options
   } = {}) {
+    super()
+
     if (connections != null && (!Number.isFinite(connections) || connections < 0)) {
       throw new InvalidArgumentError('invalid connections')
     }
@@ -9292,8 +9167,6 @@ class Pool extends PoolBase {
         ...connect
       })
     }
-
-    super(options)
 
     this[kInterceptors] = options.interceptors?.Pool && Array.isArray(options.interceptors.Pool)
       ? options.interceptors.Pool
@@ -14347,25 +14220,32 @@ function parseUnparsedAttributes (unparsedAttributes, cookieAttributeList = {}) 
     // If the attribute-name case-insensitively matches the string
     // "SameSite", the user agent MUST process the cookie-av as follows:
 
-    const attributeValueLowercase = attributeValue.toLowerCase()
+    // 1. Let enforcement be "Default".
+    let enforcement = 'Default'
 
-    // 1. If cookie-av's attribute-value is a case-insensitive match for
-    //    "None", append an attribute to the cookie-attribute-list with an
-    //    attribute-name of "SameSite" and an attribute-value of "None".
-    if (attributeValueLowercase === 'none') {
-      cookieAttributeList.sameSite = 'None'
-    } else if (attributeValueLowercase === 'strict') {
-      // 2. If cookie-av's attribute-value is a case-insensitive match for
-      //    "Strict", append an attribute to the cookie-attribute-list with
-      //    an attribute-name of "SameSite" and an attribute-value of
-      //    "Strict".
-      cookieAttributeList.sameSite = 'Strict'
-    } else if (attributeValueLowercase === 'lax') {
-      // 3. If cookie-av's attribute-value is a case-insensitive match for
-      //    "Lax", append an attribute to the cookie-attribute-list with an
-      //    attribute-name of "SameSite" and an attribute-value of "Lax".
-      cookieAttributeList.sameSite = 'Lax'
+    const attributeValueLowercase = attributeValue.toLowerCase()
+    // 2. If cookie-av's attribute-value is a case-insensitive match for
+    //    "None", set enforcement to "None".
+    if (attributeValueLowercase.includes('none')) {
+      enforcement = 'None'
     }
+
+    // 3. If cookie-av's attribute-value is a case-insensitive match for
+    //    "Strict", set enforcement to "Strict".
+    if (attributeValueLowercase.includes('strict')) {
+      enforcement = 'Strict'
+    }
+
+    // 4. If cookie-av's attribute-value is a case-insensitive match for
+    //    "Lax", set enforcement to "Lax".
+    if (attributeValueLowercase.includes('lax')) {
+      enforcement = 'Lax'
+    }
+
+    // 5. Append an attribute to the cookie-attribute-list with an
+    //    attribute-name of "SameSite" and an attribute-value of
+    //    enforcement.
+    cookieAttributeList.sameSite = enforcement
   } else {
     cookieAttributeList.unparsed ??= []
 
@@ -27042,35 +26922,40 @@ const tail = Buffer.from([0x00, 0x00, 0xff, 0xff])
 const kBuffer = Symbol('kBuffer')
 const kLength = Symbol('kLength')
 
+// Default maximum decompressed message size: 4 MB
+const kDefaultMaxDecompressedSize = 4 * 1024 * 1024
+
 class PerMessageDeflate {
   /** @type {import('node:zlib').InflateRaw} */
   #inflate
 
   #options = {}
 
-  #maxPayloadSize = 0
+  /** @type {boolean} */
+  #aborted = false
+
+  /** @type {Function|null} */
+  #currentCallback = null
 
   /**
    * @param {Map<string, string>} extensions
    */
-  constructor (extensions, options) {
+  constructor (extensions) {
     this.#options.serverNoContextTakeover = extensions.has('server_no_context_takeover')
     this.#options.serverMaxWindowBits = extensions.get('server_max_window_bits')
-
-    this.#maxPayloadSize = options.maxPayloadSize
   }
 
-  /**
-   * Decompress a compressed payload.
-   * @param {Buffer} chunk Compressed data
-   * @param {boolean} fin Final fragment flag
-   * @param {Function} callback Callback function
-   */
   decompress (chunk, fin, callback) {
     // An endpoint uses the following algorithm to decompress a message.
     // 1.  Append 4 octets of 0x00 0x00 0xff 0xff to the tail end of the
     //     payload of the message.
     // 2.  Decompress the resulting data using DEFLATE.
+
+    if (this.#aborted) {
+      callback(new MessageSizeExceededError())
+      return
+    }
+
     if (!this.#inflate) {
       let windowBits = Z_DEFAULT_WINDOWBITS
 
@@ -27093,12 +26978,23 @@ class PerMessageDeflate {
       this.#inflate[kLength] = 0
 
       this.#inflate.on('data', (data) => {
+        if (this.#aborted) {
+          return
+        }
+
         this.#inflate[kLength] += data.length
 
-        if (this.#maxPayloadSize > 0 && this.#inflate[kLength] > this.#maxPayloadSize) {
-          callback(new MessageSizeExceededError())
+        if (this.#inflate[kLength] > kDefaultMaxDecompressedSize) {
+          this.#aborted = true
           this.#inflate.removeAllListeners()
+          this.#inflate.destroy()
           this.#inflate = null
+
+          if (this.#currentCallback) {
+            const cb = this.#currentCallback
+            this.#currentCallback = null
+            cb(new MessageSizeExceededError())
+          }
           return
         }
 
@@ -27111,13 +27007,14 @@ class PerMessageDeflate {
       })
     }
 
+    this.#currentCallback = callback
     this.#inflate.write(chunk)
     if (fin) {
       this.#inflate.write(tail)
     }
 
     this.#inflate.flush(() => {
-      if (!this.#inflate) {
+      if (this.#aborted || !this.#inflate) {
         return
       }
 
@@ -27125,6 +27022,7 @@ class PerMessageDeflate {
 
       this.#inflate[kBuffer].length = 0
       this.#inflate[kLength] = 0
+      this.#currentCallback = null
 
       callback(null, full)
     })
@@ -27159,12 +27057,6 @@ const {
 const { WebsocketFrameSend } = __nccwpck_require__(3264)
 const { closeWebSocketConnection } = __nccwpck_require__(6897)
 const { PerMessageDeflate } = __nccwpck_require__(9469)
-const { MessageSizeExceededError } = __nccwpck_require__(8707)
-
-function failWebsocketConnectionWithCode (ws, code, reason) {
-  closeWebSocketConnection(ws, code, reason, Buffer.byteLength(reason))
-  failWebsocketConnection(ws, reason)
-}
 
 // This code was influenced by ws released under the MIT license.
 // Copyright (c) 2011 Einar Otto Stangvik <einaros@gmail.com>
@@ -27173,7 +27065,6 @@ function failWebsocketConnectionWithCode (ws, code, reason) {
 
 class ByteParser extends Writable {
   #buffers = []
-  #fragmentsBytes = 0
   #byteOffset = 0
   #loop = false
 
@@ -27185,27 +27076,18 @@ class ByteParser extends Writable {
   /** @type {Map<string, PerMessageDeflate>} */
   #extensions
 
-  /** @type {number} */
-  #maxFragments
-
-  /** @type {number} */
-  #maxPayloadSize
-
   /**
    * @param {import('./websocket').WebSocket} ws
    * @param {Map<string, string>|null} extensions
-   * @param {{ maxFragments?: number, maxPayloadSize?: number }} [options]
    */
-  constructor (ws, extensions, options = {}) {
+  constructor (ws, extensions) {
     super()
 
     this.ws = ws
     this.#extensions = extensions == null ? new Map() : extensions
-    this.#maxFragments = options.maxFragments ?? 0
-    this.#maxPayloadSize = options.maxPayloadSize ?? 0
 
     if (this.#extensions.has('permessage-deflate')) {
-      this.#extensions.set('permessage-deflate', new PerMessageDeflate(extensions, options))
+      this.#extensions.set('permessage-deflate', new PerMessageDeflate(extensions))
     }
   }
 
@@ -27219,19 +27101,6 @@ class ByteParser extends Writable {
     this.#loop = true
 
     this.run(callback)
-  }
-
-  #validatePayloadLength () {
-    if (
-      this.#maxPayloadSize > 0 &&
-      !isControlFrame(this.#info.opcode) &&
-      this.#info.payloadLength + this.#fragmentsBytes > this.#maxPayloadSize
-    ) {
-      failWebsocketConnectionWithCode(this.ws, 1009, 'Payload size exceeds maximum allowed size')
-      return false
-    }
-
-    return true
   }
 
   /**
@@ -27322,10 +27191,6 @@ class ByteParser extends Writable {
         if (payloadLength <= 125) {
           this.#info.payloadLength = payloadLength
           this.#state = parserStates.READ_DATA
-
-          if (!this.#validatePayloadLength()) {
-            return
-          }
         } else if (payloadLength === 126) {
           this.#state = parserStates.PAYLOADLENGTH_16
         } else if (payloadLength === 127) {
@@ -27350,10 +27215,6 @@ class ByteParser extends Writable {
 
         this.#info.payloadLength = buffer.readUInt16BE(0)
         this.#state = parserStates.READ_DATA
-
-        if (!this.#validatePayloadLength()) {
-          return
-        }
       } else if (this.#state === parserStates.PAYLOADLENGTH_64) {
         if (this.#byteOffset < 8) {
           return callback()
@@ -27376,10 +27237,6 @@ class ByteParser extends Writable {
 
         this.#info.payloadLength = lower
         this.#state = parserStates.READ_DATA
-
-        if (!this.#validatePayloadLength()) {
-          return
-        }
       } else if (this.#state === parserStates.READ_DATA) {
         if (this.#byteOffset < this.#info.payloadLength) {
           return callback()
@@ -27392,58 +27249,42 @@ class ByteParser extends Writable {
           this.#state = parserStates.INFO
         } else {
           if (!this.#info.compressed) {
-            if (!this.writeFragments(body)) {
-              return
-            }
-
-            if (this.#maxPayloadSize > 0 && this.#fragmentsBytes > this.#maxPayloadSize) {
-              failWebsocketConnectionWithCode(this.ws, 1009, new MessageSizeExceededError().message)
-              return
-            }
+            this.#fragments.push(body)
 
             // If the frame is not fragmented, a message has been received.
             // If the frame is fragmented, it will terminate with a fin bit set
             // and an opcode of 0 (continuation), therefore we handle that when
             // parsing continuation frames, not here.
             if (!this.#info.fragmented && this.#info.fin) {
-              websocketMessageReceived(this.ws, this.#info.binaryType, this.consumeFragments())
+              const fullMessage = Buffer.concat(this.#fragments)
+              websocketMessageReceived(this.ws, this.#info.binaryType, fullMessage)
+              this.#fragments.length = 0
             }
 
             this.#state = parserStates.INFO
           } else {
-            this.#extensions.get('permessage-deflate').decompress(
-              body,
-              this.#info.fin,
-              (error, data) => {
-                if (error) {
-                  const code = error instanceof MessageSizeExceededError ? 1009 : 1007
-                  failWebsocketConnectionWithCode(this.ws, code, error.message)
-                  return
-                }
-
-                if (!this.writeFragments(data)) {
-                  return
-                }
-
-                if (this.#maxPayloadSize > 0 && this.#fragmentsBytes > this.#maxPayloadSize) {
-                  failWebsocketConnectionWithCode(this.ws, 1009, new MessageSizeExceededError().message)
-                  return
-                }
-
-                if (!this.#info.fin) {
-                  this.#state = parserStates.INFO
-                  this.#loop = true
-                  this.run(callback)
-                  return
-                }
-
-                websocketMessageReceived(this.ws, this.#info.binaryType, this.consumeFragments())
-
-                this.#loop = true
-                this.#state = parserStates.INFO
-                this.run(callback)
+            this.#extensions.get('permessage-deflate').decompress(body, this.#info.fin, (error, data) => {
+              if (error) {
+                failWebsocketConnection(this.ws, error.message)
+                return
               }
-            )
+
+              this.#fragments.push(data)
+
+              if (!this.#info.fin) {
+                this.#state = parserStates.INFO
+                this.#loop = true
+                this.run(callback)
+                return
+              }
+
+              websocketMessageReceived(this.ws, this.#info.binaryType, Buffer.concat(this.#fragments))
+
+              this.#loop = true
+              this.#state = parserStates.INFO
+              this.#fragments.length = 0
+              this.run(callback)
+            })
 
             this.#loop = false
             break
@@ -27493,35 +27334,6 @@ class ByteParser extends Writable {
     this.#byteOffset -= n
 
     return buffer
-  }
-
-  writeFragments (fragment) {
-    if (
-      this.#maxFragments > 0 &&
-      this.#fragments.length === this.#maxFragments
-    ) {
-      failWebsocketConnectionWithCode(this.ws, 1008, 'Too many message fragments')
-      return false
-    }
-
-    this.#fragmentsBytes += fragment.length
-    this.#fragments.push(fragment)
-    return true
-  }
-
-  consumeFragments () {
-    const fragments = this.#fragments
-
-    if (fragments.length === 1) {
-      this.#fragmentsBytes = 0
-      return fragments.shift()
-    }
-
-    const output = Buffer.concat(fragments, this.#fragmentsBytes)
-    this.#fragments = []
-    this.#fragmentsBytes = 0
-
-    return output
   }
 
   parseCloseBody (data) {
@@ -28555,14 +28367,7 @@ class WebSocket extends EventTarget {
     // once this happens, the connection is open
     this[kResponse] = response
 
-    const webSocketOptions = this[kController]?.dispatcher?.webSocketOptions
-    const maxFragments = webSocketOptions?.maxFragments
-    const maxPayloadSize = webSocketOptions?.maxPayloadSize
-
-    const parser = new ByteParser(this, parsedExtensions, {
-      maxFragments,
-      maxPayloadSize
-    })
+    const parser = new ByteParser(this, parsedExtensions)
     parser.on('drain', onParserDrain)
     parser.on('error', onParserError.bind(this))
 
@@ -36393,6 +36198,367 @@ function getOctokit(token, options, ...additionalPlugins) {
     return new GitHubWithPlugins(getOctokitOptions(token, options));
 }
 //# sourceMappingURL=github.js.map
+;// CONCATENATED MODULE: ./src/core-overlay.js
+/**
+ * Pure helpers for the Moodle **core** PR overlay preview mode.
+ *
+ * These functions are side-effect free (no octokit, no network) so they can be
+ * unit tested in isolation, matching this repo's convention of testing exported
+ * helpers rather than the side-effectful index.js entrypoint. index.js wires
+ * the GitHub API (listing PR files) to these helpers.
+ *
+ * The companion runtime step `applyPrOverlay` lives in moodle-playground; this
+ * module only resolves the PR's changed files into the manifest that step
+ * consumes. See moodle-playground docs/decisions/0016-runtime-pr-file-overlay.md.
+ */
+
+// Default safety caps for the action; overridable via inputs.
+const DEFAULT_MAX_CORE_FILES = 80;
+const DEFAULT_MAX_CORE_FILE_BYTES = 262144; // 256 KiB
+
+// Map a Moodle core PR target branch (base.ref) to a Moodle Playground base
+// version. Kept in one place so the action and the playground agree. `master`
+// is GitHub's historical default-branch alias for `main` (dev).
+const CORE_BASE_REF_TO_VERSION = {
+  MOODLE_404_STABLE: "4.4",
+  MOODLE_405_STABLE: "4.5",
+  MOODLE_500_STABLE: "5.0",
+  MOODLE_501_STABLE: "5.1",
+  MOODLE_502_STABLE: "5.2",
+  main: "dev",
+  master: "dev",
+};
+
+// GitHub change statuses -> canonical overlay operations.
+const STATUS_MAP = {
+  added: "added",
+  modified: "modified",
+  changed: "modified",
+  copied: "added",
+  removed: "removed",
+  renamed: "renamed",
+};
+
+// File extensions treated as binary. Such files are skipped unless
+// allow-core-binary-files is true (they are fetched as bytes by the runtime).
+// Note: .svg is XML text and is intentionally NOT listed.
+const BINARY_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "ico",
+  "webp",
+  "bmp",
+  "tif",
+  "tiff",
+  "pdf",
+  "zip",
+  "gz",
+  "tar",
+  "tgz",
+  "bz2",
+  "7z",
+  "rar",
+  "woff",
+  "woff2",
+  "ttf",
+  "eot",
+  "otf",
+  "mp3",
+  "mp4",
+  "wav",
+  "ogg",
+  "oga",
+  "ogv",
+  "mov",
+  "avi",
+  "mpg",
+  "mpeg",
+  "webm",
+  "class",
+  "jar",
+  "bin",
+  "dat",
+  "exe",
+  "dll",
+  "so",
+  "dylib",
+  "sqlite",
+  "db",
+]);
+
+// Paths whose change indicates a Moodle upgrade is likely required. Identical to
+// the runtime classifier (moodle-playground src/blueprint/pr-overlay.js).
+const UPGRADE_TRIGGER_RE =
+  /^(?:(?:public\/)?version\.php|(?:.*\/)?db\/(?:install\.xml|install\.php|upgrade\.php))$/u;
+
+/**
+ * Resolve the effective preview type from the input and the repository.
+ *
+ * @param {string} input "auto" | "plugin" | "core"
+ * @param {string} repoFullName "owner/name"
+ * @returns {"plugin"|"core"}
+ */
+const resolvePreviewType = (input, repoFullName) => {
+  const value = String(input || "auto").toLowerCase();
+  if (value === "core" || value === "plugin") return value;
+  if (value === "auto") {
+    return isLikelyCoreRepo(repoFullName) ? "core" : "plugin";
+  }
+  throw new Error(
+    `Invalid preview-type: ${input}. Accepted values: auto, plugin, core.`,
+  );
+};
+
+/**
+ * Conservative Moodle-core detection. Without a checkout we cannot inspect repo
+ * markers, so we only treat the canonical upstream repository as core.
+ *
+ * @param {string} repoFullName
+ * @returns {boolean}
+ */
+const isLikelyCoreRepo = (repoFullName) =>
+  String(repoFullName || "").toLowerCase() === "moodle/moodle";
+
+/**
+ * Map a PR base branch to a Moodle Playground base version, or null when there
+ * is no known mapping (the caller should then require an explicit base-version).
+ *
+ * @param {string} baseRef
+ * @returns {string|null}
+ */
+const mapBaseRefToVersion = (baseRef) => {
+  if (!baseRef) return null;
+  return Object.hasOwn(CORE_BASE_REF_TO_VERSION, baseRef)
+    ? CORE_BASE_REF_TO_VERSION[baseRef]
+    : null;
+};
+
+/**
+ * Validate a repo-relative PR file path. Returns a reason string when the path
+ * is unsafe (so the caller can skip + report it), or null when it is safe.
+ *
+ * @param {unknown} filename
+ * @returns {string|null}
+ */
+const validateCorePath = (filename) => {
+  if (typeof filename !== "string" || filename.trim() === "") {
+    return "empty or non-string path";
+  }
+  if (filename.includes("\0")) return "contains a null byte";
+  for (let i = 0; i < filename.length; i++) {
+    if (filename.charCodeAt(i) < 0x20) return "contains control characters";
+  }
+  if (filename.includes("\\")) return "contains a backslash";
+  if (filename.startsWith("/")) return "absolute path";
+  if (filename.split("/").some((s) => s === "" || s === "." || s === "..")) {
+    return "contains an unsafe path segment";
+  }
+  return null;
+};
+
+/**
+ * Build a raw.githubusercontent.com URL for a file at a specific commit,
+ * preferring the head repo + head SHA (works for fork PRs and is immutable).
+ * Each path segment is URL-encoded while `/` separators are preserved.
+ *
+ * @param {string} headRepoFullName "owner/name" of the PR head
+ * @param {string} headSha commit SHA of the PR head
+ * @param {string} filename repo-relative path
+ * @returns {string}
+ */
+const buildRawUrl = (headRepoFullName, headSha, filename) => {
+  const encodedPath = String(filename)
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+  return `https://raw.githubusercontent.com/${headRepoFullName}/${headSha}/${encodedPath}`;
+};
+
+/**
+ * Normalize a GitHub change status to a canonical overlay operation. Throws on
+ * an unknown status so a misleading preview is never silently produced.
+ *
+ * @param {unknown} status
+ * @returns {"added"|"modified"|"removed"|"renamed"}
+ */
+const normalizeCoreStatus = (status) => {
+  const mapped = STATUS_MAP[String(status || "").toLowerCase()];
+  if (!mapped) {
+    throw new Error(`Unsupported PR file status: ${status}`);
+  }
+  return mapped;
+};
+
+/**
+ * Whether a path looks like a binary file (by extension).
+ *
+ * @param {string} filename
+ * @returns {boolean}
+ */
+const isBinaryPath = (filename) => {
+  const dot = String(filename).lastIndexOf(".");
+  if (dot < 0) return false;
+  return BINARY_EXTENSIONS.has(filename.slice(dot + 1).toLowerCase());
+};
+
+/**
+ * Convert a GitHub PR file object to an `applyPrOverlay` manifest entry.
+ *
+ * @param {object} file GitHub pulls.listFiles item
+ * @param {{headRepoFullName: string, headSha: string}} ctx
+ * @returns {{path: string, status: string, rawUrl?: string, previousPath?: string}}
+ */
+const changedFileToOverlayEntry = (
+  file,
+  { headRepoFullName, headSha },
+) => {
+  const status = normalizeCoreStatus(file.status);
+  const entry = { path: file.filename, status };
+  if (file.previous_filename) {
+    entry.previousPath = file.previous_filename;
+  }
+  if (status !== "removed") {
+    // Prefer building from headRepoFullName + headSha rather than trusting the
+    // API's raw_url (which may reference the base repo / branch name).
+    entry.rawUrl = buildRawUrl(headRepoFullName, headSha, file.filename);
+  }
+  return entry;
+};
+
+/**
+ * Whether the changed files indicate a Moodle upgrade is likely needed.
+ *
+ * @param {Array<{filename?: string, path?: string}|string>} files
+ * @returns {boolean}
+ */
+const coreNeedsUpgrade = (files) =>
+  (Array.isArray(files) ? files : []).some((f) => {
+    const p = typeof f === "string" ? f : (f?.filename ?? f?.path);
+    return typeof p === "string" && UPGRADE_TRIGGER_RE.test(p);
+  });
+
+/**
+ * Classify changed files into human-readable caveats about preview
+ * completeness. Returns an array of distinct warning messages (possibly empty).
+ *
+ * @param {Array<{filename?: string, path?: string}|string>} files
+ * @returns {string[]}
+ */
+const classifyCoreWarnings = (files) => {
+  const list = (Array.isArray(files) ? files : []).map((f) =>
+    typeof f === "string" ? f : (f?.filename ?? f?.path ?? ""),
+  );
+  const warnings = [];
+
+  const any = (re) => list.some((p) => re.test(p));
+
+  if (any(/(^|\/)composer\.(json|lock)$/u) || any(/(^|\/)vendor\//u)) {
+    warnings.push(
+      "Composer dependencies changed (composer.json/lock, vendor/) and are not reinstalled in the preview.",
+    );
+  }
+  if (
+    any(/(^|\/)package\.json$/u) ||
+    any(/(^|\/)(npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml)$/u) ||
+    any(/(^|\/)Gruntfile\.js$/u) ||
+    any(/(^|\/)amd\/src\//u)
+  ) {
+    warnings.push(
+      "Frontend sources changed (amd/src, Gruntfile, package.json, lockfiles); compiled assets are not rebuilt in the preview.",
+    );
+  }
+  if (coreNeedsUpgrade(list)) {
+    warnings.push(
+      "Database schema or version changed (version.php, db/install.*, db/upgrade.php); run-upgrade=auto will attempt an upgrade, but SQLite/WASM fidelity is lower than a full Moodle Docker/Codespaces environment.",
+    );
+  }
+
+  return warnings;
+};
+
+/**
+ * Build the Moodle core overlay blueprint object.
+ *
+ * @param {{baseVersion: string, baseRef: string, runUpgrade: string, coreRoot: string, prNumber: number|string, files: object[], maxFiles?: number, maxFileBytes?: number}} opts
+ * @returns {object}
+ */
+const buildCoreOverlayBlueprint = ({
+  baseVersion,
+  baseRef,
+  runUpgrade,
+  coreRoot,
+  prNumber,
+  files,
+  maxFiles,
+  maxFileBytes,
+}) => {
+  const overlayStep = {
+    step: "applyPrOverlay",
+    baseRef,
+    runUpgrade,
+    root: coreRoot,
+    files,
+  };
+  if (Number.isFinite(maxFiles)) overlayStep.maxFiles = maxFiles;
+  if (Number.isFinite(maxFileBytes)) overlayStep.maxFileBytes = maxFileBytes;
+
+  return {
+    preferredVersions: { php: "8.3", moodle: baseVersion },
+    landingPage: "/admin/index.php",
+    steps: [
+      {
+        step: "installMoodle",
+        options: {
+          siteName: `Moodle core PR #${prNumber} Preview`,
+          adminUser: "admin",
+          adminPass: "password",
+        },
+      },
+      overlayStep,
+      { step: "login", username: "admin" },
+    ],
+  };
+};
+
+/**
+ * Assert that the core-pr-mode is supported. Only "files" (a pre-resolved
+ * manifest) is implemented; any other value throws a clear error.
+ *
+ * @param {string} mode
+ * @returns {"files"}
+ */
+const assertCorePrMode = (mode) => {
+  const value = String(mode || "files")
+    .trim()
+    .toLowerCase();
+  if (value !== "files") {
+    throw new Error(
+      `Unsupported core-pr-mode: ${mode}. Only "files" is supported.`,
+    );
+  }
+  return value;
+};
+
+/**
+ * Normalize the run-upgrade input to off | on | auto (default auto).
+ *
+ * @param {unknown} value
+ * @returns {"off"|"on"|"auto"}
+ */
+const normalizeRunUpgrade = (value) => {
+  const v = String(value ?? "auto")
+    .trim()
+    .toLowerCase();
+  if (v === "" || v === "auto") return "auto";
+  if (["off", "false", "no", "0"].includes(v)) return "off";
+  if (["on", "true", "yes", "1"].includes(v)) return "on";
+  throw new Error(
+    `Invalid run-upgrade: ${value}. Accepted values: off, on, auto.`,
+  );
+};
+
 ;// CONCATENATED MODULE: ./src/utils.js
 /**
  * Encode a UTF-8 string as URL-safe base64 (RFC 4648 §5).
@@ -36614,6 +36780,7 @@ const buildProxyBlueprintUrl = (
 
 
 
+
 const MODE_APPEND = "append-to-description";
 const MODE_COMMENT = "comment";
 
@@ -36703,7 +36870,46 @@ const MODE_COMMENT = "comment";
     getInput("moodle-version", { required: false }) || "5.0"
   ).trim();
 
+  // ── Core PR overlay inputs (preview-type: auto | plugin | core) ──
+  const parseIntInput = (raw, fallback) => {
+    const n = parseInt(String(raw ?? "").trim(), 10);
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
+  const previewTypeInput = (
+    getInput("preview-type", { required: false }) || "auto"
+  ).trim();
+  const baseVersionInput = (
+    getInput("base-version", { required: false }) || ""
+  ).trim();
+  const runUpgradeInput = (
+    getInput("run-upgrade", { required: false }) || "auto"
+  ).trim();
+  const coreRootInput = (
+    getInput("core-root", { required: false }) || "/www/moodle"
+  ).trim();
+  const corePrMode = (
+    getInput("core-pr-mode", { required: false }) || "files"
+  )
+    .trim()
+    .toLowerCase();
+  const maxCoreFiles = parseIntInput(
+    getInput("max-core-files", { required: false }),
+    DEFAULT_MAX_CORE_FILES,
+  );
+  const maxCoreFileBytes = parseIntInput(
+    getInput("max-core-file-bytes", { required: false }),
+    DEFAULT_MAX_CORE_FILE_BYTES,
+  );
+  const allowCoreBinary =
+    (getInput("allow-core-binary-files", { required: false }) || "false")
+      .trim()
+      .toLowerCase() === "true";
+
+  const previewType = resolvePreviewType(previewTypeInput, repoFullName);
+  info(`Resolved preview type: ${previewType}`);
+
   if (
+    previewType !== "core" &&
     !pluginPath &&
     !blueprintInput &&
     !blueprintFileInput &&
@@ -36818,8 +37024,104 @@ const MODE_COMMENT = "comment";
     return JSON.stringify(blueprint);
   };
 
+  // Resolve a Moodle core PR overlay: fetch the changed files, sanitize and
+  // convert them into an applyPrOverlay manifest, and build the blueprint. The
+  // action never checks out or executes PR head code; it only reads metadata.
+  const resolveCorePreview = async () => {
+    assertCorePrMode(corePrMode);
+
+    const baseVersion = baseVersionInput || mapBaseRefToVersion(baseRef);
+    if (!baseVersion) {
+      throw new Error(
+        `No Moodle Playground base mapping for target branch "${baseRef}". ` +
+          "Set the `base-version` input (e.g. 5.1) to override.",
+      );
+    }
+    const runUpgrade = normalizeRunUpgrade(runUpgradeInput);
+
+    // Fetch all changed files, following pagination.
+    const allFiles = [];
+    let page = 1;
+    while (true) {
+      const { data: batch } = await github.rest.pulls.listFiles({
+        owner,
+        repo: repoName,
+        pull_number: prNumber,
+        per_page: 100,
+        page,
+      });
+      allFiles.push(...batch);
+      if (batch.length < 100) break;
+      page++;
+    }
+
+    if (allFiles.length > maxCoreFiles) {
+      throw new Error(
+        `This PR changes ${allFiles.length} files, exceeding max-core-files=${maxCoreFiles}. ` +
+          "Raise the limit or preview a smaller change.",
+      );
+    }
+
+    const manifest = [];
+    const skipped = [];
+    for (const file of allFiles) {
+      const reason = validateCorePath(file.filename);
+      if (reason) {
+        skipped.push({ path: String(file.filename), reason });
+        continue;
+      }
+      if (!allowCoreBinary && isBinaryPath(file.filename)) {
+        skipped.push({
+          path: file.filename,
+          reason: "binary file (not allowed)",
+        });
+        continue;
+      }
+      manifest.push(
+        changedFileToOverlayEntry(file, {
+          headRepoFullName,
+          headSha,
+        }),
+      );
+    }
+
+    if (skipped.length) {
+      warning(
+        `Skipped ${skipped.length} file(s) in the core overlay preview: ` +
+          skipped.map((s) => `${s.path} (${s.reason})`).join(", "),
+      );
+    }
+
+    const warnings = classifyCoreWarnings(allFiles);
+    for (const w of warnings) warning(w);
+
+    const blueprint = buildCoreOverlayBlueprint({
+      baseVersion,
+      baseRef,
+      runUpgrade,
+      coreRoot: coreRootInput,
+      prNumber,
+      files: manifest,
+      maxFiles: maxCoreFiles,
+      maxFileBytes: maxCoreFileBytes,
+    });
+
+    return {
+      blueprintJson: JSON.stringify(blueprint),
+      baseVersion,
+      runUpgrade,
+      warnings,
+      skipped,
+      changedCount: manifest.length,
+    };
+  };
+
+  let corePreview = null;
   let blueprintJson = "";
-  if (blueprintInput) {
+  if (previewType === "core") {
+    corePreview = await resolveCorePreview();
+    blueprintJson = corePreview.blueprintJson;
+  } else if (blueprintInput) {
     blueprintJson = blueprintInput;
     try {
       JSON.parse(blueprintJson);
@@ -36900,6 +37202,63 @@ const MODE_COMMENT = "comment";
     "{{PLAYGROUND_BUTTON}}",
   ].join("\n");
 
+  // Core overlay caveats, rendered as plain-text bullet lists. They are exposed
+  // as {{CORE_WARNINGS}} / {{CORE_SKIPPED_FILES}} so substitute() HTML-escapes
+  // any PR-derived path; the surrounding Markdown structure lives in the static
+  // template text below.
+  const coreWarningsText = corePreview
+    ? corePreview.warnings.map((w) => `- ${w}`).join("\n")
+    : "";
+  const coreSkippedText = corePreview
+    ? corePreview.skipped.map((s) => `- ${s.path} (${s.reason})`).join("\n")
+    : "";
+
+  // Build the core caveats section only when there is something to warn about.
+  const coreCaveatsLines = [];
+  if (coreWarningsText) {
+    coreCaveatsLines.push("", "**Preview caveats:**", "", "{{CORE_WARNINGS}}");
+  }
+  if (coreSkippedText) {
+    coreCaveatsLines.push(
+      "",
+      `**Skipped files (${corePreview.skipped.length}):**`,
+      "",
+      "{{CORE_SKIPPED_FILES}}",
+    );
+  }
+
+  const coreNote =
+    "> Note: this preview applies file changes at runtime over a prebuilt base. " +
+    "Changes requiring Composer, frontend builds, generated assets, database " +
+    "upgrades, or a full Moodle bundle rebuild may not be fully represented.";
+
+  const coreDefaultDescriptionTemplate = [
+    "<hr>",
+    "### Moodle Playground Preview",
+    "",
+    "This pull request can be previewed in Moodle Playground by loading the " +
+      "prebuilt Moodle base for `{{CORE_BASE_REF}}` and applying the changed " +
+      "files from commit `{{PR_HEAD_SHA}}`.",
+    "",
+    "{{PLAYGROUND_BUTTON}}",
+    "",
+    coreNote,
+    ...coreCaveatsLines,
+  ].join("\n");
+
+  const coreDefaultCommentTemplate = [
+    "### Moodle Playground Preview",
+    "",
+    "This pull request can be previewed in Moodle Playground by loading the " +
+      "prebuilt Moodle base for `{{CORE_BASE_REF}}` and applying the changed " +
+      "files from commit `{{PR_HEAD_SHA}}`.",
+    "",
+    "{{PLAYGROUND_BUTTON}}",
+    "",
+    coreNote,
+    ...coreCaveatsLines,
+  ].join("\n");
+
   const templateVariables = mergeVariables(
     {
       PR_NUMBER: String(prNumber),
@@ -36915,21 +37274,43 @@ const MODE_COMMENT = "comment";
       PLUGIN_SLUG: pluginSlug,
       MOODLE_VERSION: moodleVersion,
       PLAYGROUND_HOST: playgroundHost,
+      PREVIEW_TYPE: previewType,
     },
     {
       PLAYGROUND_URL: previewUrl,
       PLAYGROUND_BLUEPRINT_JSON: blueprintJson,
       EXTRA_TEXT: extraText,
     },
+    // Core-only template variables (empty strings in plugin mode).
+    corePreview
+      ? {
+          CORE_BASE_REF: baseRef,
+          CORE_BASE_VERSION: corePreview.baseVersion,
+          CORE_HEAD_SHA: headSha,
+          CORE_HEAD_REPO: headRepoFullName,
+          CORE_CHANGED_FILES: String(corePreview.changedCount),
+          CORE_SKIPPED_FILES: coreSkippedText,
+          CORE_WARNINGS: coreWarningsText,
+          CORE_RUN_UPGRADE: corePreview.runUpgrade,
+        }
+      : {},
   );
   templateVariables.PLAYGROUND_BUTTON = substitute(
     defaultButtonTemplate,
     templateVariables,
   );
 
-  const descriptionTemplate =
-    descriptionTemplateInput || defaultDescriptionTemplate;
-  const commentTemplate = commentTemplateInput || defaultCommentTemplate;
+  const defaultDescription =
+    previewType === "core"
+      ? coreDefaultDescriptionTemplate
+      : defaultDescriptionTemplate;
+  const defaultComment =
+    previewType === "core"
+      ? coreDefaultCommentTemplate
+      : defaultCommentTemplate;
+
+  const descriptionTemplate = descriptionTemplateInput || defaultDescription;
+  const commentTemplate = commentTemplateInput || defaultComment;
 
   let renderedDescription =
     mode === MODE_APPEND
