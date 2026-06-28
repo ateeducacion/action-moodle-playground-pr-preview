@@ -142,6 +142,16 @@ blueprint whose `applyPrOverlay` step fetches each file's final contents at the 
 `base-version` to override). Changes requiring Composer, frontend builds, generated assets, or a
 full database upgrade may not be fully represented; the action surfaces these as caveats.
 
+**Fork PRs are supported.** Raw file URLs are built from the PR **head** repository (the fork) and
+head SHA, so a PR opened from `someone/moodle` against `moodle/moodle` previews the fork's changes
+directly. The conservative `auto` detection only treats `moodle/moodle` as core, so if you run this
+action inside a fork of Moodle (the base repository is itself a fork), set `preview-type: core`
+explicitly.
+
+For a large PR, the inlined manifest is automatically replaced by a compact `repo` + `pr`
+blueprint so the preview URL never hits HTTP 414; the runtime then resolves the changed files
+itself.
+
 > Security: the action only reads PR metadata and posts a link. It never checks out or executes
 > PR head code. PR code runs only later, in the reviewer's browser/WASM runtime. If you trigger
 > this with `pull_request_target`, do **not** add a checkout-and-run of the PR head in that
