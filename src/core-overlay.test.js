@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertCorePrMode,
   buildCoreOverlayBlueprint,
+  buildCoreRepoPrBlueprint,
   buildRawUrl,
   changedFileToOverlayEntry,
   classifyCoreWarnings,
@@ -247,6 +248,40 @@ describe("buildCoreOverlayBlueprint", () => {
       files,
     });
     expect(bp.steps[0].options.siteName).toBe("Moodle core PR #123 Preview");
+  });
+});
+
+describe("buildCoreRepoPrBlueprint", () => {
+  it("builds a compact repo+pr overlay step (no inlined files)", () => {
+    const bp = buildCoreRepoPrBlueprint({
+      baseVersion: "5.1",
+      baseRef: "MOODLE_501_STABLE",
+      runUpgrade: "auto",
+      coreRoot: "/www/moodle",
+      prNumber: 123,
+      repo: "moodle/moodle",
+      maxFiles: 80,
+      maxFileBytes: 262144,
+    });
+    expect(bp.steps.map((s) => s.step)).toEqual([
+      "installMoodle",
+      "applyPrOverlay",
+      "login",
+    ]);
+    const overlay = bp.steps[1];
+    expect(overlay).toMatchObject({
+      step: "applyPrOverlay",
+      repo: "moodle/moodle",
+      pr: 123,
+      baseRef: "MOODLE_501_STABLE",
+      runUpgrade: "auto",
+      root: "/www/moodle",
+    });
+    // The compact blueprint must NOT inline a files manifest.
+    expect(overlay.files).toBeUndefined();
+    // It stays small and constant regardless of how many files the PR touches
+    // (the inlined `files` manifest grows ~270 bytes/file and 414s at ~28 files).
+    expect(JSON.stringify(bp).length).toBeLessThan(500);
   });
 });
 

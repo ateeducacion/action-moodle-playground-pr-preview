@@ -4,6 +4,7 @@ import * as githubLib from "@actions/github";
 import {
   assertCorePrMode,
   buildCoreOverlayBlueprint,
+  buildCoreRepoPrBlueprint,
   changedFileToOverlayEntry,
   classifyCoreWarnings,
   DEFAULT_MAX_CORE_FILE_BYTES,
@@ -341,7 +342,11 @@ const MODE_COMMENT = "comment";
     const warnings = classifyCoreWarnings(allFiles);
     for (const w of warnings) core.warning(w);
 
-    const blueprint = buildCoreOverlayBlueprint({
+    // Pre-resolved `files` manifest (preferred: reproducible, no runtime API
+    // calls). For large PRs this can overflow the `?blueprint=` URL length and
+    // 414, so we also build a compact `repo`+`pr` blueprint and let the URL
+    // selection below fall back to it when the inlined manifest is too long.
+    const filesBlueprint = buildCoreOverlayBlueprint({
       baseVersion,
       baseRef,
       runUpgrade,
@@ -351,9 +356,20 @@ const MODE_COMMENT = "comment";
       maxFiles: maxCoreFiles,
       maxFileBytes: maxCoreFileBytes,
     });
+    const repoPrBlueprint = buildCoreRepoPrBlueprint({
+      baseVersion,
+      baseRef,
+      runUpgrade,
+      coreRoot: coreRootInput,
+      prNumber,
+      repo: repoFullName,
+      maxFiles: maxCoreFiles,
+      maxFileBytes: maxCoreFileBytes,
+    });
 
     return {
-      blueprintJson: JSON.stringify(blueprint),
+      filesBlueprintJson: JSON.stringify(filesBlueprint),
+      repoPrBlueprintJson: JSON.stringify(repoPrBlueprint),
       baseVersion,
       runUpgrade,
       warnings,
@@ -366,7 +382,20 @@ const MODE_COMMENT = "comment";
   let blueprintJson = "";
   if (previewType === "core") {
     corePreview = await resolveCorePreview();
-    blueprintJson = corePreview.blueprintJson;
+    // Prefer the reproducible inlined `files` manifest; fall back to the compact
+    // `repo`+`pr` blueprint when inlining `files` would exceed the safe URL
+    // length (HTTP 414). The runtime resolves the files itself in that case.
+    const filesPreviewUrl = `${playgroundHost}?blueprint=${toBase64Url(
+      corePreview.filesBlueprintJson,
+    )}`;
+    if (previewUrlExceedsLimit(filesPreviewUrl)) {
+      core.info(
+        "Core overlay manifest is large; using a compact repo+pr blueprint to keep the preview URL short.",
+      );
+      blueprintJson = corePreview.repoPrBlueprintJson;
+    } else {
+      blueprintJson = corePreview.filesBlueprintJson;
+    }
   } else if (blueprintInput) {
     blueprintJson = blueprintInput;
     try {

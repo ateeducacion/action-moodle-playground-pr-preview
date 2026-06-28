@@ -36523,6 +36523,56 @@ const buildCoreOverlayBlueprint = ({
 };
 
 /**
+ * Build a compact core overlay blueprint that defers file resolution to the
+ * runtime via `repo` + `pr` instead of inlining a (potentially large) `files`
+ * manifest. Used as the fallback when the inlined `files` blueprint would make
+ * the `?blueprint=` URL exceed the safe length (HTTP 414). The runtime
+ * `applyPrOverlay` step fetches the changed files from the GitHub API itself, so
+ * the URL stays constant-size regardless of how many files the PR touches.
+ *
+ * @param {{baseVersion: string, baseRef: string, runUpgrade: string, coreRoot: string, prNumber: number|string, repo: string, maxFiles?: number, maxFileBytes?: number}} opts
+ * @returns {object}
+ */
+const buildCoreRepoPrBlueprint = ({
+  baseVersion,
+  baseRef,
+  runUpgrade,
+  coreRoot,
+  prNumber,
+  repo,
+  maxFiles,
+  maxFileBytes,
+}) => {
+  const overlayStep = {
+    step: "applyPrOverlay",
+    repo,
+    pr: Number(prNumber),
+    baseRef,
+    runUpgrade,
+    root: coreRoot,
+  };
+  if (Number.isFinite(maxFiles)) overlayStep.maxFiles = maxFiles;
+  if (Number.isFinite(maxFileBytes)) overlayStep.maxFileBytes = maxFileBytes;
+
+  return {
+    preferredVersions: { php: "8.3", moodle: baseVersion },
+    landingPage: "/admin/index.php",
+    steps: [
+      {
+        step: "installMoodle",
+        options: {
+          siteName: `Moodle core PR #${prNumber} Preview`,
+          adminUser: "admin",
+          adminPass: "password",
+        },
+      },
+      overlayStep,
+      { step: "login", username: "admin" },
+    ],
+  };
+};
+
+/**
  * Assert that the core-pr-mode is supported. Only "files" (a pre-resolved
  * manifest) is implemented; any other value throws a clear error.
  *
@@ -37095,7 +37145,11 @@ const MODE_COMMENT = "comment";
     const warnings = classifyCoreWarnings(allFiles);
     for (const w of warnings) warning(w);
 
-    const blueprint = buildCoreOverlayBlueprint({
+    // Pre-resolved `files` manifest (preferred: reproducible, no runtime API
+    // calls). For large PRs this can overflow the `?blueprint=` URL length and
+    // 414, so we also build a compact `repo`+`pr` blueprint and let the URL
+    // selection below fall back to it when the inlined manifest is too long.
+    const filesBlueprint = buildCoreOverlayBlueprint({
       baseVersion,
       baseRef,
       runUpgrade,
@@ -37105,9 +37159,20 @@ const MODE_COMMENT = "comment";
       maxFiles: maxCoreFiles,
       maxFileBytes: maxCoreFileBytes,
     });
+    const repoPrBlueprint = buildCoreRepoPrBlueprint({
+      baseVersion,
+      baseRef,
+      runUpgrade,
+      coreRoot: coreRootInput,
+      prNumber,
+      repo: repoFullName,
+      maxFiles: maxCoreFiles,
+      maxFileBytes: maxCoreFileBytes,
+    });
 
     return {
-      blueprintJson: JSON.stringify(blueprint),
+      filesBlueprintJson: JSON.stringify(filesBlueprint),
+      repoPrBlueprintJson: JSON.stringify(repoPrBlueprint),
       baseVersion,
       runUpgrade,
       warnings,
@@ -37120,7 +37185,20 @@ const MODE_COMMENT = "comment";
   let blueprintJson = "";
   if (previewType === "core") {
     corePreview = await resolveCorePreview();
-    blueprintJson = corePreview.blueprintJson;
+    // Prefer the reproducible inlined `files` manifest; fall back to the compact
+    // `repo`+`pr` blueprint when inlining `files` would exceed the safe URL
+    // length (HTTP 414). The runtime resolves the files itself in that case.
+    const filesPreviewUrl = `${playgroundHost}?blueprint=${toBase64Url(
+      corePreview.filesBlueprintJson,
+    )}`;
+    if (previewUrlExceedsLimit(filesPreviewUrl)) {
+      info(
+        "Core overlay manifest is large; using a compact repo+pr blueprint to keep the preview URL short.",
+      );
+      blueprintJson = corePreview.repoPrBlueprintJson;
+    } else {
+      blueprintJson = corePreview.filesBlueprintJson;
+    }
   } else if (blueprintInput) {
     blueprintJson = blueprintInput;
     try {

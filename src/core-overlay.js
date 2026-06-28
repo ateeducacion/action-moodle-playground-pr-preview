@@ -322,6 +322,56 @@ export const buildCoreOverlayBlueprint = ({
 };
 
 /**
+ * Build a compact core overlay blueprint that defers file resolution to the
+ * runtime via `repo` + `pr` instead of inlining a (potentially large) `files`
+ * manifest. Used as the fallback when the inlined `files` blueprint would make
+ * the `?blueprint=` URL exceed the safe length (HTTP 414). The runtime
+ * `applyPrOverlay` step fetches the changed files from the GitHub API itself, so
+ * the URL stays constant-size regardless of how many files the PR touches.
+ *
+ * @param {{baseVersion: string, baseRef: string, runUpgrade: string, coreRoot: string, prNumber: number|string, repo: string, maxFiles?: number, maxFileBytes?: number}} opts
+ * @returns {object}
+ */
+export const buildCoreRepoPrBlueprint = ({
+  baseVersion,
+  baseRef,
+  runUpgrade,
+  coreRoot,
+  prNumber,
+  repo,
+  maxFiles,
+  maxFileBytes,
+}) => {
+  const overlayStep = {
+    step: "applyPrOverlay",
+    repo,
+    pr: Number(prNumber),
+    baseRef,
+    runUpgrade,
+    root: coreRoot,
+  };
+  if (Number.isFinite(maxFiles)) overlayStep.maxFiles = maxFiles;
+  if (Number.isFinite(maxFileBytes)) overlayStep.maxFileBytes = maxFileBytes;
+
+  return {
+    preferredVersions: { php: "8.3", moodle: baseVersion },
+    landingPage: "/admin/index.php",
+    steps: [
+      {
+        step: "installMoodle",
+        options: {
+          siteName: `Moodle core PR #${prNumber} Preview`,
+          adminUser: "admin",
+          adminPass: "password",
+        },
+      },
+      overlayStep,
+      { step: "login", username: "admin" },
+    ],
+  };
+};
+
+/**
  * Assert that the core-pr-mode is supported. Only "files" (a pre-resolved
  * manifest) is implemented; any other value throws a clear error.
  *
