@@ -37,7 +37,8 @@ The action does **not** build, test, or deploy anything. It only:
 │   │   └── expose-artifact-on-public-url/
 │   │       └── action.yml                # Composite action: publishes CI-built ZIPs to a GitHub release
 │   └── workflows/
-│       ├── check-dist.yml                # CI: uploads dist/ as artifact for verification
+│       ├── ci.yml                        # CI: lint, test, and verify dist/ is in sync (fails on drift)
+│       ├── dependabot-dist.yml           # CI: auto-rebuilds and commits dist/ on Dependabot PRs
 │       ├── codeql-analysis.yml           # CI: CodeQL security scanning
 │       └── publish-immutable-action.yml  # CI: publishes action on GitHub release
 ├── README.md                             # User-facing documentation
@@ -250,9 +251,17 @@ Use this when a plugin requires compilation, transpilation, or bundling before i
 
 ## CI Workflows
 
-### check-dist.yml
+### ci.yml
 
-Runs on push to `main` and on PRs. Uploads `dist/` as an artifact so maintainers can verify the bundled output matches the source.
+Runs on push to `main`, on PRs, and via manual `workflow_dispatch`. Three jobs:
+
+- **lint** -- `npm ci` then `npm run lint` (Biome).
+- **test** -- `npm ci` then `npm test` (vitest).
+- **verify-dist** -- `npm ci`, `npm run build`, then fails if `git status --porcelain dist/` is non-empty (i.e. the committed bundle diverges from source). This is the guard that enforces "always rebuild after editing `src/index.js`."
+
+### dependabot-dist.yml
+
+On Dependabot PRs, rebuilds `dist/` and commits the result back to the PR branch, so a build-tool bump (e.g. `@vercel/ncc`) or a bundled runtime dependency change doesn't leave `dist/` stale and fail `verify-dist`. Note: pushes made with the default `GITHUB_TOKEN` don't retrigger workflow runs, so the `verify-dist` check on a Dependabot PR can stay red even after this workflow fixes `dist/` -- re-run it manually (`workflow_dispatch` on `ci.yml`, or push an empty commit) if that happens.
 
 ### codeql-analysis.yml
 
