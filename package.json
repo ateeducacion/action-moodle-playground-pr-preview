@@ -18,7 +18,7 @@
     "@actions/github": "^9.1.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.7",
+    "@biomejs/biome": "^2.5.8",
     "@vercel/ncc": "^0.44.1",
     "vitest": "^4.1.10"
   }
